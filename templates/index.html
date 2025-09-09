@@ -1,23 +1,36 @@
 {% extends "base.html" %}
 {% block content %}
 <h1>Görselleri yükle → DOCX planını indir</h1>
-<p class="muted">Drive yok. Görselleri burada ver, sistem her görsel için <b>1 sayfa</b> olacak şekilde
-  <b>açıklama → iletişim → 3 hashtag</b> sırasıyla <b>.docx</b> üretir.</p>
+<p class="muted">
+  Ay ve aralığı seç; sistem <b>ayın 1’inden 29’una</b> kadar güncel takvimle tarihleri üretir,
+  her sayfanın <b>üstüne paylaşım tarihi</b> yazılır.
+</p>
 
 <form id="planForm" action="/generate" method="post" enctype="multipart/form-data" class="card">
 
+  <div class="grid2">
+    <div class="field">
+      <label>Plan Ayı</label>
+      <input type="month" name="plan_month" id="plan_month" required value="{{ default_month }}">
+      <small class="muted">Güncel takvime göre 1–29 arası planlanır.</small>
+    </div>
+    <div class="field">
+      <label>Kaç günde bir?</label>
+      <input type="number" name="interval_days" id="interval_days" min="1" value="1" required>
+      <small class="muted">Örn: 1 = her gün, 2 = gün aşırı…</small>
+    </div>
+  </div>
+
   <div class="field">
-    <label>Dosya adı</label>
+    <label>Doküman adı</label>
     <input type="text" name="doc_name" id="doc_name" required
-           value="Instagram_Plani_{{ suggested_name }}">
-    <small class="muted">Örn: Kasim_Instagram_Plani_2025</small>
+           value="Instagram_Plani_{% if suggested_name %}{{ suggested_name }}{% endif %}">
   </div>
 
   <div class="field">
     <label>İletişim bilgisi</label>
     <input type="text" name="contact_info" id="contact_info" required
            value="📞 0 (242) 000 00 00   🌐 https://example.com">
-    <small class="muted">Her sayfada açıklamanın altında yer alır.</small>
   </div>
 
   <div class="field">
@@ -30,7 +43,7 @@
           <b>Görselleri sürükleyip bırak</b> veya
           <label for="fileInput" class="linklike">Dosyaları Seç</label>
         </div>
-        <div class="dz-hint">PNG, JPG/JPEG, WebP. Büyük görseller otomatik optimize edilir.</div>
+        <div class="dz-hint">PNG, JPG/JPEG, WebP. Yüklemeden önce 1280px’e sıkıştırılır.</div>
       </div>
       <input id="fileInput" type="file" name="files" accept="image/*" multiple hidden>
     </div>
@@ -40,6 +53,7 @@
       <span id="totalSize" class="muted">Toplam: 0 MB</span>
     </div>
 
+    <div id="scheduleInfo" class="muted" style="margin-top:6px;"></div>
     <div id="previewGrid" class="file-grid"></div>
     <div id="errorBox" class="alert hidden"></div>
   </div>
@@ -49,16 +63,6 @@
     <button id="clearBtn" class="btn btn-secondary" type="button">Temizle</button>
   </div>
 </form>
-
-<div class="tips">
-  <details>
-    <summary>İpucu: Maliyeti düşük tutma</summary>
-    <ul>
-      <li>Görseller yüklenmeden önce istemci tarafında 1280px JPEG'e sıkıştırılır → küçük istek, hızlı indirme.</li>
-      <li>Açıklama + 3 hashtag tek çağrıda üretilir, gereksiz token harcanmaz.</li>
-    </ul>
-  </details>
-</div>
 
 <script>
   (function () {
@@ -75,8 +79,7 @@
           const scale = Math.min(maxEdge / Math.max(w, h), 1);
           w = Math.round(w * scale);
           h = Math.round(h * scale);
-          canvas.width = w;
-          canvas.height = h;
+          canvas.width = w; canvas.height = h;
           const ctx = canvas.getContext('2d');
           ctx.drawImage(img, 0, 0, w, h);
           canvas.toBlob(blob => {
@@ -109,23 +112,42 @@
     const fileCount = document.getElementById('fileCount');
     const totalSize = document.getElementById('totalSize');
     const previewGrid = document.getElementById('previewGrid');
+    const scheduleInfo = document.getElementById('scheduleInfo');
     const submitBtn = document.getElementById('submitBtn');
     const clearBtn = document.getElementById('clearBtn');
     const errorBox = document.getElementById('errorBox');
     const docNameEl = document.getElementById('doc_name');
     const contactEl = document.getElementById('contact_info');
+    const planMonthEl = document.getElementById('plan_month');
+    const intervalEl = document.getElementById('interval_days');
 
     let currentFiles = [];
+
     function bytesToMB(b) { return (b / (1024 * 1024)).toFixed(2); }
     function showError(msg) { errorBox.textContent = msg; errorBox.classList.remove('hidden'); }
     function clearError() { errorBox.textContent = ''; errorBox.classList.add('hidden'); }
+    function clearPreviews() { previewGrid.innerHTML = ''; }
     function updateStatus() {
       fileCount.textContent = `${currentFiles.length}/${MAX_FILES} görsel seçildi`;
       const totalBytes = currentFiles.reduce((a, f) => a + (f.size || 0), 0);
       totalSize.textContent = 'Toplam: ' + bytesToMB(totalBytes) + ' MB';
       submitBtn.disabled = currentFiles.length === 0 || currentFiles.length > MAX_FILES;
     }
-    function clearPreviews() { previewGrid.innerHTML = ''; }
+
+    // Basit plan sayacı (1–29 aralığı, ay uzunluğunu hesaba kat)
+    function calcPlanCount() {
+      const ym = planMonthEl.value; // YYYY-MM
+      const n = Math.max(1, parseInt(intervalEl.value || '1', 10));
+      if (!/^\d{4}-\d{2}$/.test(ym)) { scheduleInfo.textContent = ''; return 0; }
+      const [y, m] = ym.split('-').map(Number);
+      const lastDay = new Date(y, m, 0).getDate(); // ayın son günü
+      const cutoff = Math.min(29, lastDay);
+      let cnt = 0;
+      for (let day = 1; day <= cutoff; day += n) cnt++;
+      scheduleInfo.textContent = `Bu ay ${cnt} tarih planlanacak (1 → ${cutoff}, ${n} günde bir).`;
+      return cnt;
+    }
+
     function makePreview(file, idx) {
       const card = document.createElement('div'); card.className = 'file-card';
       const img = document.createElement('img'); img.alt = file.name; img.loading = 'lazy';
@@ -136,14 +158,18 @@
       removeBtn.addEventListener('click', () => { currentFiles.splice(idx, 1); renderPreviews(); });
       card.appendChild(img); card.appendChild(meta); card.appendChild(removeBtn); return card;
     }
+
     function renderPreviews() {
       clearPreviews(); clearError();
+      const planCnt = calcPlanCount();
       if (currentFiles.length > MAX_FILES) showError(`En fazla ${MAX_FILES} görsel yükleyebilirsiniz.`);
+      if (planCnt > 0 && currentFiles.length > planCnt) {
+        showError(`Seçilen aralıkla ${planCnt} tarih çıkıyor; ${currentFiles.length} görsel fazla. Aralığı düşürün veya görsel sayısını azaltın.`);
+      }
       currentFiles.forEach((f, i) => previewGrid.appendChild(makePreview(f, i)));
       updateStatus();
     }
 
-    // Dosya ekleme → önce sıkıştır, sonra listeye ekle
     async function addFiles(fileList) {
       const imgs = Array.from(fileList || []).filter(f => /^image\//.test(f.type));
       if (!imgs.length) return;
@@ -158,7 +184,7 @@
       renderPreviews();
     }
 
-    // Dropzone davranışları
+    // Dropzone
     ['dragenter','dragover','dragleave','drop'].forEach(evt => {
       dropzone.addEventListener(evt, e => { e.preventDefault(); e.stopPropagation(); }, false);
     });
@@ -168,17 +194,28 @@
     dropzone.addEventListener('drop', e => addFiles(e.dataTransfer.files));
     fileInput.addEventListener('change', e => addFiles(e.target.files));
 
+    // Ay / aralık değişince bilgi güncelle
+    planMonthEl.addEventListener('change', renderPreviews);
+    intervalEl.addEventListener('input', renderPreviews);
+
     clearBtn.addEventListener('click', () => { currentFiles = []; fileInput.value = ''; renderPreviews(); });
 
     // Submit
     form.addEventListener('submit', (e) => {
       e.preventDefault();
+      const planCnt = calcPlanCount();
       if (currentFiles.length === 0) { showError('Lütfen en az 1 görsel yükleyin.'); return; }
       if (currentFiles.length > MAX_FILES) { showError(`En fazla ${MAX_FILES} görsel yükleyebilirsiniz.`); return; }
+      if (planCnt > 0 && currentFiles.length > planCnt) {
+        showError(`Seçilen aralıkla ${planCnt} tarih çıkıyor; ${currentFiles.length} görsel fazla. Aralığı düşürün veya görsel sayısını azaltın.`);
+        return;
+      }
 
       submitBtn.disabled = true; submitBtn.textContent = 'Oluşturuluyor…'; clearError();
 
       const fd = new FormData();
+      fd.append('plan_month', planMonthEl.value);
+      fd.append('interval_days', intervalEl.value);
       fd.append('doc_name', docNameEl.value);
       fd.append('contact_info', contactEl.value);
       currentFiles.forEach(f => fd.append('files', f, f.name));
@@ -187,9 +224,9 @@
         .then(async resp => {
           if (!resp.ok) {
             const text = await resp.text();
-            if (resp.status === 413) throw new Error('Yükleme çok büyük (413). Görseller otomatik sıkıştırılıyor ama hâlâ büyükse, sayıyı veya boyutu düşürün.');
+            if (resp.status === 413) throw new Error('Yükleme çok büyük (413). Görseller sıkıştırıldı; gerekirse sayıyı/boyutu azaltın.');
             if (resp.status === 502 || resp.status === 504) throw new Error('Sunucu zaman aşımı (502/504). 10 görsel çok büyükse 5+5 deneyin.');
-            throw new Error('Sunucu hatası: ' + text.slice(0, 200));
+            throw new Error('Sunucu hatası: ' + text.slice(0, 300));
           }
           const blob = await resp.blob();
           const url = URL.createObjectURL(blob);
@@ -210,6 +247,7 @@
         });
     });
 
+    // İlk render
     renderPreviews();
   })();
 </script>
