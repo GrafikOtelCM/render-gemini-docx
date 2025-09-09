@@ -1,1 +1,46 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>Bu Ayın Kullanımı — {{ month_title }}</h1>
+
+<div class="card">
+  <div class="grid2">
+    <div>
+      <div class="kpi"><span>Çalıştırma</span><strong>{{ summary.runs }}</strong></div>
+      <div class="kpi"><span>Toplam Görsel</span><strong>{{ summary.images }}</strong></div>
+    </div>
+    <div>
+      <div class="kpi"><span>Input Tokens</span><strong>{{ summary.in_tokens }}</strong></div>
+      <div class="kpi"><span>Output Tokens</span><strong>{{ summary.out_tokens }}</strong></div>
+    </div>
+  </div>
+  <div class="grid2" style="margin-top:12px">
+    <div class="kpi"><span>Maliyet (USD)</span><strong>${{ '%.4f'|format(summary.usd) }}</strong></div>
+    <div class="kpi"><span>Maliyet (TRY)</span><strong>₺{{ '%.2f'|format(summary.try) }}</strong></div>
+  </div>
+  <p class="muted" style="margin-top:8px">
+    Model: <b>{{ model }}</b> • Tarifeler: in {{ rate_in }} $/1M, out {{ rate_out }} $/1M • Kur: $1 = ₺{{ usd_try_rate }}
+  </p>
+  <p><a class="btn" href="/dashboard.csv">CSV indir</a></p>
+</div>
+
+<h2>Son 30 Çalıştırma</h2>
+<div class="table">
+  <div class="thead">
+    <div>Tarih</div><div>Ad</div><div>Görsel</div><div>In</div><div>Out</div><div>$</div><div>₺</div>
+  </div>
+  {% for r in rows %}
+    <div class="trow">
+      <div>{{ r[0] }}</div>
+      <div>{{ r[1] }}</div>
+      <div>{{ r[2] }}</div>
+      <div>{{ r[3] }}</div>
+      <div>{{ r[4] }}</div>
+      <div>${{ '%.5f'|format(r[5]) }}</div>
+      <div>₺{{ '%.2f'|format(r[6]) }}</div>
+    </div>
+  {% else %}
+    <p class="muted">Bu ay henüz kayıt yok.</p>
+  {% endfor %}
+</div>
+{% endblock %}
 
