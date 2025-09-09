@@ -1,4 +1,236 @@
-<form action="/generate" method="post" enctype="multipart/form-data" class="card">
-  <input type="file" name="files" accept="image/*" multiple required>
+{% extends "base.html" %}
+{% block content %}
+<h1>Görselleri yükle → DOCX planını indir</h1>
+<p class="muted">Drive yok. Görselleri burada ver, sistem her görsel için <b>1 sayfa</b> olacak şekilde
+  <b>açıklama → iletişim → 3 hashtag</b> sırasıyla <b>.docx</b> üretir.</p>
+
+<form id="planForm" action="/generate" method="post" enctype="multipart/form-data" class="card">
+
+  <div class="field">
+    <label>Dosya adı</label>
+    <input type="text" name="doc_name" id="doc_name" required
+           value="Instagram_Plani_{{ suggested_name }}">
+    <small class="muted">Örn: Kasim_Instagram_Plani_2025</small>
+  </div>
+
+  <div class="field">
+    <label>İletişim bilgisi</label>
+    <input type="text" name="contact_info" id="contact_info" required
+           value="📞 0 (242) 000 00 00   🌐 https://example.com">
+    <small class="muted">Her sayfada açıklamanın altında yer alır.</small>
+  </div>
+
+  <!-- Drag & Drop Bölümü -->
+  <div class="field">
+    <label>Görseller (çoklu seçim, max 10)</label>
+
+    <div id="dropzone" class="dropzone" tabindex="0">
+      <div class="dz-inner">
+        <div class="dz-icon">🖼️</div>
+        <div class="dz-text">
+          <b>Görselleri sürükleyip bırak</b> veya
+          <label for="fileInput" class="linklike">Dosyaları Seç</label>
+        </div>
+        <div class="dz-hint">PNG, JPG/JPEG, WebP. Büyük görseller otomatik optimize edilir.</div>
+      </div>
+      <!-- Gizli gerçek input -->
+      <input id="fileInput" type="file" name="files" accept="image/*" multiple hidden>
+    </div>
+
+    <div class="dz-status">
+      <span id="fileCount">0/10 görsel seçildi</span>
+      <span id="totalSize" class="muted">Toplam: 0 MB</span>
+    </div>
+
+    <!-- ÖNİZLEME GRID -->
+    <div id="previewGrid" class="file-grid"></div>
+
+    <div id="errorBox" class="alert hidden"></div>
+  </div>
+
+  <div class="form-actions">
+    <button id="submitBtn" class="btn" type="submit" disabled>Oluştur ve indir (.docx)</button>
+    <button id="clearBtn" class="btn btn-secondary" type="button">Temizle</button>
+  </div>
 </form>
 
+<div class="tips">
+  <details>
+    <summary>İpucu: Maliyeti düşük tutma</summary>
+    <ul>
+      <li>Görselleri aşırı büyük yüklemenize gerek yok; sistem Gemini’ya 1280px önizleme gönderir.</li>
+      <li>Açıklama + 3 hashtag tek çağrıda üretilir, gereksiz token harcanmaz.</li>
+    </ul>
+  </details>
+</div>
+
+<script>
+  (function () {
+    const MAX_FILES = 10;
+    const form = document.getElementById('planForm');
+    const fileInput = document.getElementById('fileInput');
+    const dropzone = document.getElementById('dropzone');
+    const fileCount = document.getElementById('fileCount');
+    const totalSize = document.getElementById('totalSize');
+    const previewGrid = document.getElementById('previewGrid');
+    const submitBtn = document.getElementById('submitBtn');
+    const clearBtn = document.getElementById('clearBtn');
+    const errorBox = document.getElementById('errorBox');
+
+    // Seçilen dosyaları hafızada tutalım
+    let currentFiles = [];
+
+    function bytesToMB(b) { return (b / (1024 * 1024)).toFixed(2); }
+
+    function showError(msg) {
+      errorBox.textContent = msg;
+      errorBox.classList.remove('hidden');
+    }
+    function clearError() {
+      errorBox.textContent = '';
+      errorBox.classList.add('hidden');
+    }
+
+    function updateStatus() {
+      fileCount.textContent = currentFiles.length + '/' + MAX_FILES + ' görsel seçildi';
+      const totalBytes = currentFiles.reduce((a, f) => a + (f.size || 0), 0);
+      totalSize.textContent = 'Toplam: ' + bytesToMB(totalBytes) + ' MB';
+      submitBtn.disabled = currentFiles.length === 0 || currentFiles.length > MAX_FILES;
+    }
+
+    function clearPreviews() {
+      previewGrid.innerHTML = '';
+    }
+
+    function makePreview(file, idx) {
+      const card = document.createElement('div');
+      card.className = 'file-card';
+
+      const img = document.createElement('img');
+      img.alt = file.name;
+      img.loading = 'lazy';
+
+      const reader = new FileReader();
+      reader.onload = e => { img.src = e.target.result; };
+      reader.readAsDataURL(file);
+
+      const meta = document.createElement('div');
+      meta.className = 'file-meta';
+      meta.innerHTML = `
+        <div class="name" title="${file.name}">${file.name}</div>
+        <div class="size">${bytesToMB(file.size)} MB</div>
+      `;
+
+      const removeBtn = document.createElement('button');
+      removeBtn.type = 'button';
+      removeBtn.className = 'chip';
+      removeBtn.textContent = 'Kaldır';
+      removeBtn.addEventListener('click', () => {
+        currentFiles.splice(idx, 1);
+        renderPreviews();
+      });
+
+      card.appendChild(img);
+      card.appendChild(meta);
+      card.appendChild(removeBtn);
+      return card;
+    }
+
+    function renderPreviews() {
+      clearPreviews();
+      clearError();
+      if (currentFiles.length > MAX_FILES) {
+        showError('En fazla ' + MAX_FILES + ' görsel yükleyebilirsiniz.');
+      }
+      currentFiles.forEach((f, i) => {
+        previewGrid.appendChild(makePreview(f, i));
+      });
+      updateStatus();
+    }
+
+    function addFiles(fileList) {
+      const imgs = Array.from(fileList || []).filter(f => /^image\//.test(f.type));
+      // Birleştir, sınırı aşıyorsa kes
+      currentFiles = currentFiles.concat(imgs).slice(0, MAX_FILES);
+      renderPreviews();
+    }
+
+    // Dropzone davranışları
+    ;['dragenter','dragover','dragleave','drop'].forEach(evt => {
+      dropzone.addEventListener(evt, e => { e.preventDefault(); e.stopPropagation(); }, false);
+    });
+    ;['dragenter','dragover'].forEach(evt => {
+      dropzone.addEventListener(evt, () => dropzone.classList.add('hover'), false);
+    });
+    ;['dragleave','drop','blur'].forEach(evt => {
+      dropzone.addEventListener(evt, () => dropzone.classList.remove('hover'), false);
+    });
+    dropzone.addEventListener('click', () => fileInput.click());
+    dropzone.addEventListener('drop', e => {
+      addFiles(e.dataTransfer.files);
+    });
+    fileInput.addEventListener('change', e => addFiles(e.target.files));
+
+    clearBtn.addEventListener('click', () => {
+      currentFiles = [];
+      fileInput.value = '';
+      renderPreviews();
+    });
+
+    // Form submit: seçilen currentFiles'ı gerçek FormData'ya koy
+    form.addEventListener('submit', (e) => {
+      if (currentFiles.length === 0) {
+        e.preventDefault(); showError('Lütfen en az 1 görsel yükleyin.'); return;
+      }
+      if (currentFiles.length > MAX_FILES) {
+        e.preventDefault(); showError('En fazla ' + MAX_FILES + ' görsel yükleyebilirsiniz.'); return;
+      }
+
+      // Disable UI + loading durumu
+      submitBtn.disabled = true;
+      submitBtn.textContent = 'Oluşturuluyor…';
+      clearError();
+
+      // Manüel submit yapalım ki currentFiles'ı ekleyebilelim
+      e.preventDefault();
+      const fd = new FormData();
+      fd.append('doc_name', document.getElementById('doc_name').value);
+      fd.append('contact_info', document.getElementById('contact_info').value);
+      currentFiles.forEach(f => fd.append('files', f, f.name));
+
+      fetch('/generate', { method: 'POST', body: fd })
+        .then(async resp => {
+          if (!resp.ok) {
+            const text = await resp.text();
+            throw new Error('Sunucu hatası: ' + text.slice(0, 200));
+          }
+          // .docx indirme
+          const blob = await resp.blob();
+          const url = window.URL.createObjectURL(blob);
+          const a = document.createElement('a');
+          a.href = url;
+          a.download = (document.getElementById('doc_name').value || 'Instagram_Plani') + '.docx';
+          document.body.appendChild(a);
+          a.click();
+          a.remove();
+          window.URL.revokeObjectURL(url);
+
+          // Reset
+          submitBtn.textContent = 'Oluştur ve indir (.docx)';
+          submitBtn.disabled = false;
+          currentFiles = [];
+          fileInput.value = '';
+          renderPreviews();
+        })
+        .catch(err => {
+          showError(err.message || 'Bilinmeyen hata');
+          submitBtn.textContent = 'Oluştur ve indir (.docx)';
+          submitBtn.disabled = false;
+        });
+    });
+
+    // İlk durum
+    renderPreviews();
+  })();
+</script>
+{% endblock %}
