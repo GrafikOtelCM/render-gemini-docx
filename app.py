@@ -36,7 +36,7 @@ ASSUME_OUT_TOKENS = int(os.getenv("ASSUME_OUT_TOKENS", "80"))
 
 BANNED_WORDS_RE = re.compile(r"(kaçış|kaçamak|kraliyet)", re.IGNORECASE)
 DB_PATH = os.getenv("USAGE_DB_PATH", "usage.db")
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "YOUR_API_KEY_HERE")
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "AIzaSyDdUV3SuQ1bbhqILvR_70wGRSMdDGkOoNI")
 
 # ========= FastAPI =========
 app = FastAPI(title=APP_NAME)
