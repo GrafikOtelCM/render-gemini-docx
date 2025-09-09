@@ -6,6 +6,7 @@ from fastapi import FastAPI, File, Form, Request, UploadFile
 from fastapi.responses import HTMLResponse, StreamingResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
+from jinja2 import TemplateNotFound
 
 from PIL import Image
 from docx import Document
@@ -13,11 +14,11 @@ from docx.shared import Inches
 
 # ========= Ayarlar =========
 APP_NAME = "Plan Otomasyon – Gemini to DOCX"
-MAX_IMAGES = 10                          # Plan başına görsel limiti (isteğiniz)
+MAX_IMAGES = 10                          # Plan başına görsel limiti
 MAX_EDGE = 1280                          # Gemini'ye giden önizleme (token azaltır)
 IMG_JPEG_QUALITY = 80
-DEFAULT_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "AIzaSyDdUV3SuQ1bbhqILvR_70wGRSMdDGkOoNI")
+DEFAULT_MODEL = os.getenv("GEMINI_MODEL", "gemini-1.5-flash")
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "YOUR_API_KEY_HERE")
 
 # Fiyatlar (USD / 1M token)
 RATE_IN_PER_MTOK  = float(os.getenv("RATE_IN_PER_MTOK",  "0.075"))
@@ -35,7 +36,11 @@ DB_PATH = os.getenv("USAGE_DB_PATH", "usage.db")
 
 # ========= FastAPI =========
 app = FastAPI(title=APP_NAME)
-app.mount("/static", StaticFiles(directory="static"), name="static")
+# static/ klasörü yoksa uyarı yaz, ama mount etme (beyaz ekranın önüne geçer)
+if os.path.isdir("static"):
+    app.mount("/static", StaticFiles(directory="static"), name="static")
+else:
+    print("Uyarı: 'static/' klasörü bulunamadı; CSS yüklenmeyecek.")
 templates = Jinja2Templates(directory="templates")
 
 
@@ -210,7 +215,7 @@ def build_docx_and_collect_usage(doc_name: str, contact_info: str,
         total_in  += in_tok
         total_out += out_tok
 
-        # Metinler (sıra: açıklama → iletişim → 3 hashtag)
+        # Metinler
         document.add_paragraph(caption)
         document.add_paragraph(contact_info)
         document.add_paragraph(" ".join(tags))
@@ -237,10 +242,13 @@ def healthz():
 def index(request: Request):
     today = datetime.datetime.now().strftime("%Y%m%d-%H%M")
     suggested = f"Instagram_Plani_{today}"
-    return templates.TemplateResponse(
-        "index.html",
-        {"request": request, "app_name": APP_NAME, "suggested_name": suggested}
-    )
+    try:
+        return templates.TemplateResponse(
+            "index.html",
+            {"request": request, "app_name": APP_NAME, "suggested_name": suggested}
+        )
+    except TemplateNotFound:
+        return HTMLResponse(f"<h1>{APP_NAME}</h1><p>templates/index.html bulunamadı.</p>", status_code=200)
 
 @app.post("/generate", response_class=HTMLResponse)
 async def generate(
@@ -251,13 +259,9 @@ async def generate(
 ):
     files = [f for f in files if (f and f.filename)]
     if not files:
-        return templates.TemplateResponse("done.html", {
-            "request": request, "error": "Görsel yüklenmedi. Lütfen en az 1 görsel seçin.", "app_name": APP_NAME
-        })
+        return PlainTextResponse("Görsel yüklenmedi. Lütfen en az 1 görsel seçin.", status_code=400)
     if len(files) > MAX_IMAGES:
-        return templates.TemplateResponse("done.html", {
-            "request": request, "error": f"En fazla {MAX_IMAGES} görsel yükleyebilirsiniz.", "app_name": APP_NAME
-        })
+        return PlainTextResponse(f"En fazla {MAX_IMAGES} görsel yükleyebilirsiniz.", status_code=400)
 
     processed = []
     for f in files:
@@ -265,17 +269,13 @@ async def generate(
             jpeg_bytes, stub = make_preview_bytes(f)
             processed.append((stub, jpeg_bytes, f.filename))
         except Exception:
-            return templates.TemplateResponse("done.html", {
-                "request": request, "error": f"{f.filename} okunamadı. Lütfen geçerli bir görsel yükleyin.", "app_name": APP_NAME
-            })
+            return PlainTextResponse(f"{f.filename} okunamadı. Lütfen geçerli bir görsel yükleyin.", status_code=400)
 
     # DOCX + kullanım
     try:
         content, total_in, total_out = build_docx_and_collect_usage(doc_name, contact_info, processed)
     except Exception as e:
-        return templates.TemplateResponse("done.html", {
-            "request": request, "error": f"Üretim hatası: {str(e)}", "app_name": APP_NAME
-        })
+        return PlainTextResponse(f"Üretim hatası: {str(e)}", status_code=500)
 
     # Maliyet
     cost_usd = (total_in / 1_000_000.0) * RATE_IN_PER_MTOK + (total_out / 1_000_000.0) * RATE_OUT_PER_MTOK
@@ -326,18 +326,21 @@ def dashboard(request: Request):
     rows = cur.fetchall()
     conn.close()
 
-    return templates.TemplateResponse("dashboard.html", {
-        "request": request,
-        "app_name": APP_NAME,
-        "month_title": now.strftime("%B %Y"),
-        "summary": {"runs": cnt, "images": img_sum, "in_tokens": in_sum, "out_tokens": out_sum,
-                    "usd": usd_sum, "try": try_sum},
-        "rows": rows,
-        "usd_try_rate": USD_TRY_RATE,
-        "model": DEFAULT_MODEL,
-        "rate_in": RATE_IN_PER_MTOK,
-        "rate_out": RATE_OUT_PER_MTOK
-    })
+    try:
+        return templates.TemplateResponse("dashboard.html", {
+            "request": request,
+            "app_name": APP_NAME,
+            "month_title": now.strftime("%B %Y"),
+            "summary": {"runs": cnt, "images": img_sum, "in_tokens": in_sum, "out_tokens": out_sum,
+                        "usd": usd_sum, "try": try_sum},
+            "rows": rows,
+            "usd_try_rate": USD_TRY_RATE,
+            "model": DEFAULT_MODEL,
+            "rate_in": RATE_IN_PER_MTOK,
+            "rate_out": RATE_OUT_PER_MTOK
+        })
+    except TemplateNotFound:
+        return HTMLResponse("<h1>Dashboard</h1><p>templates/dashboard.html bulunamadı.</p>", status_code=200)
 
 @app.get("/dashboard.csv", response_class=PlainTextResponse)
 def dashboard_csv():
