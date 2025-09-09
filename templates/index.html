@@ -160,4 +160,57 @@
 
     // Dropzone davranışları
     ['dragenter','dragover','dragleave','drop'].forEach(evt => {
-      dropzone.a
+      dropzone.addEventListener(evt, e => { e.preventDefault(); e.stopPropagation(); }, false);
+    });
+    ['dragenter','dragover'].forEach(evt => dropzone.addEventListener(evt, () => dropzone.classList.add('hover'), false));
+    ['dragleave','drop','blur'].forEach(evt => dropzone.addEventListener(evt, () => dropzone.classList.remove('hover'), false));
+    dropzone.addEventListener('click', () => fileInput.click());
+    dropzone.addEventListener('drop', e => addFiles(e.dataTransfer.files));
+    fileInput.addEventListener('change', e => addFiles(e.target.files));
+
+    clearBtn.addEventListener('click', () => { currentFiles = []; fileInput.value = ''; renderPreviews(); });
+
+    // Submit
+    form.addEventListener('submit', (e) => {
+      e.preventDefault();
+      if (currentFiles.length === 0) { showError('Lütfen en az 1 görsel yükleyin.'); return; }
+      if (currentFiles.length > MAX_FILES) { showError(`En fazla ${MAX_FILES} görsel yükleyebilirsiniz.`); return; }
+
+      submitBtn.disabled = true; submitBtn.textContent = 'Oluşturuluyor…'; clearError();
+
+      const fd = new FormData();
+      fd.append('doc_name', docNameEl.value);
+      fd.append('contact_info', contactEl.value);
+      currentFiles.forEach(f => fd.append('files', f, f.name));
+
+      fetch('/generate', { method: 'POST', body: fd })
+        .then(async resp => {
+          if (!resp.ok) {
+            const text = await resp.text();
+            if (resp.status === 413) throw new Error('Yükleme çok büyük (413). Görseller otomatik sıkıştırılıyor ama hâlâ büyükse, sayıyı veya boyutu düşürün.');
+            if (resp.status === 502 || resp.status === 504) throw new Error('Sunucu zaman aşımı (502/504). 10 görsel çok büyükse 5+5 deneyin.');
+            throw new Error('Sunucu hatası: ' + text.slice(0, 200));
+          }
+          const blob = await resp.blob();
+          const url = URL.createObjectURL(blob);
+          const a = document.createElement('a');
+          a.href = url;
+          a.download = (docNameEl.value || 'Instagram_Plani') + '.docx';
+          document.body.appendChild(a); a.click(); a.remove();
+          URL.revokeObjectURL(url);
+
+          submitBtn.textContent = 'Oluştur ve indir (.docx)';
+          submitBtn.disabled = false;
+          currentFiles = []; fileInput.value = ''; renderPreviews();
+        })
+        .catch(err => {
+          showError(err.message || 'Bilinmeyen hata');
+          submitBtn.textContent = 'Oluştur ve indir (.docx)';
+          submitBtn.disabled = false;
+        });
+    });
+
+    renderPreviews();
+  })();
+</script>
+{% endblock %}
