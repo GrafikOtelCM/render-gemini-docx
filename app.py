@@ -18,7 +18,7 @@ MAX_IMAGES = 10                          # Plan başına görsel limiti
 MAX_EDGE = 1280                          # Gemini'ye giden önizleme (token azaltır)
 IMG_JPEG_QUALITY = 80
 DEFAULT_MODEL = os.getenv("GEMINI_MODEL", "gemini-1.5-flash")
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "YOUR_API_KEY_HERE")
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "AIzaSyDdUV3SuQ1bbhqILvR_70wGRSMdDGkOoNI")
 
 # Fiyatlar (USD / 1M token)
 RATE_IN_PER_MTOK  = float(os.getenv("RATE_IN_PER_MTOK",  "0.075"))
