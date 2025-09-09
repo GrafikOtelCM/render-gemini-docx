@@ -1,4 +1,4 @@
-import io, os, re, json, base64, datetime, sqlite3, csv
+import io, os, re, json, base64, datetime, sqlite3, csv, traceback, calendar
 from typing import List, Tuple
 
 import requests
@@ -12,37 +12,39 @@ from PIL import Image
 from docx import Document
 from docx.shared import Inches
 
+# ====== Zaman dilimi (Europe/Istanbul) ======
+try:
+    from zoneinfo import ZoneInfo
+    TZ = ZoneInfo("Europe/Istanbul")
+except Exception:
+    TZ = None  # yoksa naive kullanırız
+
 # ========= Ayarlar =========
 APP_NAME = "Plan Otomasyon – Gemini to DOCX"
-MAX_IMAGES = 10                          # Plan başına görsel limiti
-MAX_EDGE = 1280                          # Gemini'ye giden önizleme (token azaltır)
+MAX_IMAGES = 10
+MAX_EDGE = 1280
 IMG_JPEG_QUALITY = 80
-DEFAULT_MODEL = os.getenv("GEMINI_MODEL", "gemini-1.5-flash")
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "AIzaSyDdUV3SuQ1bbhqILvR_70wGRSMdDGkOoNI")
+DEFAULT_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
 
-# Fiyatlar (USD / 1M token)
-RATE_IN_PER_MTOK  = float(os.getenv("RATE_IN_PER_MTOK",  "0.075"))
-RATE_OUT_PER_MTOK = float(os.getenv("RATE_OUT_PER_MTOK", "0.30"))
+# Fiyatlar (USD / 1M token) - interaktif
+RATE_IN_PER_MTOK  = float(os.getenv("RATE_IN_PER_MTOK",  "0.30"))
+RATE_OUT_PER_MTOK = float(os.getenv("RATE_OUT_PER_MTOK", "2.50"))
 
-# Kur (USD→TRY)
 USD_TRY_RATE = float(os.getenv("USD_TRY_RATE", "41.2"))
-
-# usageMetadata yoksa güvenli varsayımlar (görsel başına)
 ASSUME_IN_TOKENS  = int(os.getenv("ASSUME_IN_TOKENS",  "400"))
 ASSUME_OUT_TOKENS = int(os.getenv("ASSUME_OUT_TOKENS", "80"))
 
 BANNED_WORDS_RE = re.compile(r"(kaçış|kaçamak|kraliyet)", re.IGNORECASE)
 DB_PATH = os.getenv("USAGE_DB_PATH", "usage.db")
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "YOUR_API_KEY_HERE")
 
 # ========= FastAPI =========
 app = FastAPI(title=APP_NAME)
-# static/ klasörü yoksa uyarı yaz, ama mount etme (beyaz ekranın önüne geçer)
 if os.path.isdir("static"):
     app.mount("/static", StaticFiles(directory="static"), name="static")
 else:
     print("Uyarı: 'static/' klasörü bulunamadı; CSS yüklenmeyecek.")
 templates = Jinja2Templates(directory="templates")
-
 
 # ========= DB =========
 def ensure_db():
@@ -82,6 +84,50 @@ def month_bounds(dt: datetime.datetime):
     last = nxt - datetime.timedelta(seconds=1)
     return first, last
 
+# ========= TR tarih formatı =========
+MONTHS_TR = ["Ocak","Şubat","Mart","Nisan","Mayıs","Haziran","Temmuz","Ağustos","Eylül","Ekim","Kasım","Aralık"]
+WEEKDAYS_TR = ["Pazartesi","Salı","Çarşamba","Perşembe","Cuma","Cumartesi","Pazar"]  # Monday=0
+
+def format_date_tr(d: datetime.date) -> str:
+    wd = WEEKDAYS_TR[d.weekday()]
+    return f"{d.day:02d} {MONTHS_TR[d.month-1]} {d.year} {wd}"
+
+# ========= Plan takvimi üretimi =========
+def generate_schedule(year: int, month: int, every_n_days: int) -> List[datetime.date]:
+    # Ayın 1'inden başla, 29'unda bitir (ayın gerçek uzunluğu dikkate alınır)
+    last_day = calendar.monthrange(year, month)[1]
+    cutoff = min(29, last_day)
+    if every_n_days < 1:
+        every_n_days = 1
+    dates = []
+    day = 1
+    while day <= cutoff:
+        dates.append(datetime.date(year, month, day))
+        day += every_n_days
+    return dates
+
+# ========= JSON Ayıklayıcı =========
+import re as _re
+def _extract_json_maybe(text: str):
+    if not text:
+        return None
+    m = _re.search(r"```(?:json)?\s*({[\s\S]*?})\s*```", text, _re.IGNORECASE)
+    if m:
+        try:
+            return json.loads(m.group(1))
+        except Exception:
+            pass
+    m = _re.search(r"({[\s\S]*})", text)
+    if m:
+        raw = m.group(1)
+        open_cnt = raw.count("{"); close_cnt = raw.count("}")
+        if close_cnt < open_cnt:
+            raw = raw + ("}" * (open_cnt - close_cnt))
+        try:
+            return json.loads(raw)
+        except Exception:
+            pass
+    return None
 
 # ========= DOCX yardımcıları =========
 def _set_doc_margins(section, top=0.5, bottom=0.5, left=0.5, right=0.5):
@@ -104,26 +150,21 @@ def make_preview_bytes(upload: UploadFile) -> Tuple[bytes, str]:
     fname = os.path.splitext(upload.filename or f"img_{id(upload)}")[0]
     return out.read(), fname
 
-
 # ========= Gemini çağrısı =========
 def call_gemini_for_caption_and_tags(jpeg_bytes: bytes):
-    """
-    Dönüş: (caption:str, tags:list[str], in_tokens:int, out_tokens:int)
-    usageMetadata yoksa ASSUME_* değerleriyle hesap yapılır.
-    """
     if not GEMINI_API_KEY or GEMINI_API_KEY == "YOUR_API_KEY_HERE":
         raise RuntimeError("GEMINI_API_KEY tanımlı değil. Render Environment'a ekleyin.")
 
     base64_img = base64.b64encode(jpeg_bytes).decode("utf-8")
+
     prompt = (
-        "Aşağıdaki görsel için Instagram odaklı, satışa götüren, KISA ve TÜRKÇE bir açıklama üret. "
-        "1-2 cümle, emojiyi az ve yerinde kullan. "
-        "Ayrıca bu görsele uygun TAM 3 adet hashtag üret. "
-        "Marka/özel isim verme. "
-        "‘kaçış’, ‘kaçamak’, ‘kraliyet’ kelimelerini asla kullanma. "
-        "Sadece aşağıdaki JSON ile cevap ver."
+        "Yalnızca JSON üret. Şema: {\"caption\": string, \"hashtags\": [string, string, string]}.\n"
+        "Kurallar: Türkçe, 1-2 cümle kısa pazarlama açıklaması; emoji makul; marka/özel isim verme. "
+        "Tam 3 hashtag üret. Şu kelimeleri asla kullanma: kaçış, kaçamak, kraliyet."
     )
-    generation_config = {"response_mime_type": "application/json"}
+
+    generation_config = { "response_mime_type": "application/json" }
+
     payload = {
         "contents": [{
             "role": "user",
@@ -136,70 +177,82 @@ def call_gemini_for_caption_and_tags(jpeg_bytes: bytes):
     }
 
     url = f"https://generativelanguage.googleapis.com/v1beta/models/{DEFAULT_MODEL}:generateContent?key={GEMINI_API_KEY}"
-    res = requests.post(url, json=payload, timeout=60)
-
-    in_tok, out_tok = ASSUME_IN_TOKENS, ASSUME_OUT_TOKENS
+    try:
+        res = requests.post(url, json=payload, timeout=60)
+    except Exception as e:
+        raise RuntimeError(f"Gemini bağlantı hatası: {e}")
 
     if res.status_code != 200:
-        print("Gemini error:", res.status_code, res.text[:300])
-        return ("Zarif konforla tanışın; tatilin özü burada. ✨", ["#tatil", "#otel", "#holiday"], in_tok, out_tok)
+        msg = res.text.strip()[:500]
+        raise RuntimeError(f"Gemini API hata {res.status_code}: {msg}")
 
     data = res.json()
 
-    # usageMetadata
+    in_tok, out_tok = ASSUME_IN_TOKENS, ASSUME_OUT_TOKENS
     try:
         usage = data.get("usageMetadata") or data.get("candidates", [{}])[0].get("usageMetadata") or {}
         in_tok  = int(usage.get("promptTokenCount", in_tok))
         out_tok = int(usage.get("candidatesTokenCount", usage.get("outputTokenCount", out_tok)))
-    except Exception as e:
-        print("usageMetadata parse err:", e)
+    except Exception:
+        pass
 
-    # JSON içerik
-    text = ""
+    parts = (data.get("candidates") or [{}])[0].get("content", {}).get("parts", [])
+    text = "".join(p.get("text", "") for p in parts).strip()
+
     try:
-        parts = data.get("candidates", [])[0].get("content", {}).get("parts", [])
-        text = "".join(p.get("text", "") for p in parts).strip()
         obj = json.loads(text)
-        caption = obj.get("caption", "").strip()
-        hashtags = obj.get("hashtags", [])
+    except Exception:
+        obj = _extract_json_maybe(text)
 
-        caption = re.sub(r"\s+", " ", caption)
-        caption = BANNED_WORDS_RE.sub("", caption)
-        caption = re.sub(r"https?://\S+", "", caption).strip()
+    if not isinstance(obj, dict):
+        raise RuntimeError(f"Gemini beklenen JSON'u döndürmedi. Ham yanıtın başı: {text[:240]}")
 
-        tags = []
-        for t in hashtags:
-            t = t.strip()
-            if not t.startswith("#"):
-                t = "#" + t.lstrip("#")
-            if BANNED_WORDS_RE.search(t):
-                continue
-            if t not in tags:
-                tags.append(t)
-            if len(tags) == 3:
-                break
+    caption = str(obj.get("caption", "")).strip()
+    hashtags = obj.get("hashtags", [])
 
-        if not caption:
-            caption = "Zarif konforla tanışın; tatilin özü burada. ✨"
-        if len(tags) != 3:
-            tags = ["#tatil", "#otel", "#holiday"]
+    caption = re.sub(r"\s+", " ", caption)
+    caption = BANNED_WORDS_RE.sub("", caption)
+    caption = re.sub(r"https?://\S+", "", caption).strip()
 
-        return caption, tags, in_tok, out_tok
-    except Exception as e:
-        print("Parsing error:", e, text[:300])
-        return ("Zarif konforla tanışın; tatilin özü burada. ✨", ["#tatil", "#otel", "#holiday"], in_tok, out_tok)
+    tags = []
+    for t in (hashtags or []):
+        t = str(t).strip()
+        if not t:
+            continue
+        if not t.startswith("#"):
+            t = "#" + t.lstrip("#")
+        if BANNED_WORDS_RE.search(t):
+            continue
+        if t not in tags:
+            tags.append(t)
+        if len(tags) == 3:
+            break
 
+    if not caption or len(tags) != 3:
+        raise RuntimeError(f"Gemini JSON eksik/boş döndü. caption='{caption}', tags={tags}")
+
+    return caption, tags, in_tok, out_tok
 
 # ========= DOCX üretimi + kullanım toplama =========
 def build_docx_and_collect_usage(doc_name: str, contact_info: str,
-                                 images: List[Tuple[str, bytes, str]]) -> Tuple[bytes, int, int]:
+                                 images: List[Tuple[str, bytes, str]],
+                                 plan_dates: List[datetime.date]) -> Tuple[bytes, int, int]:
     document = Document()
     _set_doc_margins(document.sections[0], 0.5, 0.5, 0.5, 0.5)
 
     total_in, total_out = 0, 0
 
     for idx, (stub, jpeg_bytes, _) in enumerate(images):
-        # Görsel
+        # 1) Tarih başlığı (görselin üstünde)
+        if idx < len(plan_dates):
+            date_str = format_date_tr(plan_dates[idx])
+        else:
+            date_str = "Tarih plan dışı"
+        p = document.add_paragraph()
+        run = p.add_run(f"Paylaşım Tarihi: {date_str}")
+        run.bold = True
+
+        # 2) Görsel
         pic_stream = io.BytesIO(jpeg_bytes)
         try:
             document.add_picture(pic_stream, width=Inches(6))
@@ -210,12 +263,11 @@ def build_docx_and_collect_usage(doc_name: str, contact_info: str,
             buf.seek(0)
             document.add_picture(buf, width=Inches(6))
 
-        # Gemini
+        # 3) Metinler
         caption, tags, in_tok, out_tok = call_gemini_for_caption_and_tags(jpeg_bytes)
         total_in  += in_tok
         total_out += out_tok
 
-        # Metinler
         document.add_paragraph(caption)
         document.add_paragraph(contact_info)
         document.add_paragraph(" ".join(tags))
@@ -228,7 +280,6 @@ def build_docx_and_collect_usage(doc_name: str, contact_info: str,
     out.seek(0)
     return out.read(), total_in, total_out
 
-
 # ========= Routes =========
 @app.on_event("startup")
 def _startup():
@@ -240,12 +291,15 @@ def healthz():
 
 @app.get("/", response_class=HTMLResponse)
 def index(request: Request):
-    today = datetime.datetime.now().strftime("%Y%m%d-%H%M")
-    suggested = f"Instagram_Plani_{today}"
+    now = datetime.datetime.now(TZ) if TZ else datetime.datetime.now()
+    suggested = now.strftime("%Y%m%d-%H%M")
+    default_month = now.strftime("%Y-%m")  # input type=month için
     try:
         return templates.TemplateResponse(
             "index.html",
-            {"request": request, "app_name": APP_NAME, "suggested_name": suggested}
+            {"request": request, "app_name": APP_NAME,
+             "suggested_name": f"Instagram_Plani_{suggested}",
+             "default_month": default_month}
         )
     except TemplateNotFound:
         return HTMLResponse(f"<h1>{APP_NAME}</h1><p>templates/index.html bulunamadı.</p>", status_code=200)
@@ -255,6 +309,8 @@ async def generate(
     request: Request,
     doc_name: str = Form(...),
     contact_info: str = Form(...),
+    plan_month: str = Form(...),         # YYYY-MM
+    interval_days: int = Form(...),      # kaç günde bir
     files: List[UploadFile] = File(...)
 ):
     files = [f for f in files if (f and f.filename)]
@@ -263,6 +319,25 @@ async def generate(
     if len(files) > MAX_IMAGES:
         return PlainTextResponse(f"En fazla {MAX_IMAGES} görsel yükleyebilirsiniz.", status_code=400)
 
+    # Plan ayı ayrıştır
+    try:
+        year_str, month_str = plan_month.split("-")
+        year, month = int(year_str), int(month_str)
+        if not (1 <= month <= 12):
+            raise ValueError()
+    except Exception:
+        return PlainTextResponse("Plan ayı hatalı. Lütfen YYYY-AA formatında bir ay seçin.", status_code=400)
+
+    # Takvim üret
+    dates = generate_schedule(year, month, int(interval_days))
+    if len(files) > len(dates):
+        return PlainTextResponse(
+            f"Seçilen aralıkla {len(dates)} tarih üretiliyor, ancak {len(files)} görsel yüklediniz. "
+            f"Aralığı küçültün (örn. 1-2 gün) ya da görsel sayısını azaltın.",
+            status_code=400
+        )
+
+    # Görselleri işleme
     processed = []
     for f in files:
         try:
@@ -273,8 +348,9 @@ async def generate(
 
     # DOCX + kullanım
     try:
-        content, total_in, total_out = build_docx_and_collect_usage(doc_name, contact_info, processed)
+        content, total_in, total_out = build_docx_and_collect_usage(doc_name, contact_info, processed, dates[:len(processed)])
     except Exception as e:
+        print("Üretim hatası:", traceback.format_exc()[:2000])
         return PlainTextResponse(f"Üretim hatası: {str(e)}", status_code=500)
 
     # Maliyet
@@ -282,7 +358,7 @@ async def generate(
     cost_try = cost_usd * USD_TRY_RATE
 
     # Log
-    ts = datetime.datetime.now().isoformat(timespec="seconds")
+    ts = (datetime.datetime.now(TZ) if TZ else datetime.datetime.now()).isoformat(timespec="seconds")
     try:
         log_usage(ts, DEFAULT_MODEL, doc_name, len(processed), total_in, total_out, cost_usd, cost_try)
     except Exception as e:
@@ -305,7 +381,7 @@ async def generate(
 
 @app.get("/dashboard", response_class=HTMLResponse)
 def dashboard(request: Request):
-    now = datetime.datetime.now()
+    now = datetime.datetime.now(TZ) if TZ else datetime.datetime.now()
     start, end = month_bounds(now)
     conn = sqlite3.connect(DB_PATH)
     cur = conn.cursor()
@@ -344,7 +420,7 @@ def dashboard(request: Request):
 
 @app.get("/dashboard.csv", response_class=PlainTextResponse)
 def dashboard_csv():
-    now = datetime.datetime.now()
+    now = datetime.datetime.now(TZ) if TZ else datetime.datetime.now()
     start, end = month_bounds(now)
     conn = sqlite3.connect(DB_PATH)
     cur = conn.cursor()
