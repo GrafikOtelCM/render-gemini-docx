@@ -1,1 +1,26 @@
+<!doctype html>
+<html lang="tr">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{{ app_name }}</title>
+  <link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="container" style="display:flex;justify-content:space-between;align-items:center;">
+      <strong>{{ app_name }}</strong>
+      <nav><a class="navlink" href="/">Oluştur</a> • <a class="navlink" href="/dashboard">Dashboard</a></nav>
+    </div>
+  </header>
+  <main class="container">
+    {% block content %}{% endblock %}
+  </main>
+  <footer class="footer">
+    <div class="container">
+      <small>© {{ app_name }} • Düşük kaynakta yüksek verim için optimize.</small>
+    </div>
+  </footer>
+</body>
+</html>
 
