@@ -13,24 +13,25 @@
     <div class="brand">{{ APP_NAME }}</div>
     <nav class="nav">
       {% if request.session.get('user') %}
-        <span class="badge">{{ request.session['user']['username'] }} • {{ request.session['user']['role'] }}</span>
+        <a class="btn btn-ghost" href="/">Planlama</a>
         {% if request.session['user']['role'] == 'admin' %}
           <a class="btn btn-ghost" href="/admin/dashboard">Admin</a>
         {% endif %}
+        <span class="badge">{{ request.session['user']['username'] }} • {{ request.session['user']['role'] }}</span>
         <form method="post" action="/logout" class="inline">
           <input type="hidden" name="csrf_token" value="{{ get_csrf_token(request) }}">
           <button class="btn">Çıkış</button>
         </form>
+      {% else %}
+        <a class="btn primary" href="/login">Giriş</a>
       {% endif %}
     </nav>
   </header>
-
   <main class="container">
     {% block content %}{% endblock %}
   </main>
-
   <footer class="footer">
-    <small>© {{ now().year if now else '' }} Tatil & Sosyal Medya Operasyon</small>
+    <small>© {{ APP_NAME }}</small>
   </footer>
 </body>
 </html>
