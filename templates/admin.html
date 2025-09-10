@@ -1,0 +1,61 @@
+{% extends "layout.html" %}
+{% block content %}
+<h2>Admin – Kullanıcı Yönetimi</h2>
+
+<div class="card">
+  <h3>Yeni Kullanıcı Oluştur</h3>
+  <form method="post" action="/admin/users/create" class="grid">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <label>
+      Kullanıcı adı
+      <input name="username" required>
+    </label>
+    <label>
+      Şifre
+      <input name="password" type="password" required>
+    </label>
+    <label>
+      Rol
+      <select name="role">
+        <option value="user">user</option>
+        <option value="admin">admin</option>
+      </select>
+    </label>
+    <div class="actions">
+      <button class="btn" type="submit">Oluştur</button>
+    </div>
+  </form>
+</div>
+
+<div class="card">
+  <h3>Mevcut Kullanıcılar</h3>
+  <table class="table">
+    <thead>
+      <tr>
+        <th>ID</th><th>Kullanıcı</th><th>Rol</th><th>Oluşturma</th><th>İşlem</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for u in users %}
+      <tr>
+        <td>{{ u.id }}</td>
+        <td>{{ u.username }}</td>
+        <td>{{ u.role }}</td>
+        <td>{{ u.created_at }}</td>
+        <td>
+          {% if u.username != user.username %}
+          <form method="post" action="/admin/users/delete" onsubmit="return confirm('Silinsin mi?')">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+            <input type="hidden" name="user_id" value="{{ u.id }}">
+            <button class="btn btn-danger" type="submit">Sil</button>
+          </form>
+          {% else %}
+            —
+          {% endif %}
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endblock %}
