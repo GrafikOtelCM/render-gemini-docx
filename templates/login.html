@@ -1,23 +1,25 @@
 {% extends "base.html" %}
 {% block content %}
-<div class="card card-sm">
-  <h1>Giriş Yap</h1>
-  {% if request.query_params.get('err') == 'auth' %}
-    <div class="alert error">Kullanıcı adı veya şifre hatalı.</div>
-  {% elif request.query_params.get('err') == 'csrf' %}
-    <div class="alert error">CSRF doğrulaması başarısız. Sayfayı yenileyip tekrar deneyin.</div>
-  {% endif %}
+<section class="card card-padded max-w-480 mx-auto">
+  <h1 class="h1 mb-1">Giriş Yap</h1>
+  <p class="muted mb-4">Lütfen kullanıcı adı ve şifrenizi girin.</p>
 
-  <form method="post" action="/login" class="form">
-    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-    <label>Kullanıcı Adı
-      <input name="username" required autocomplete="username">
+  <form action="/login" method="post" class="stack gap-3">
+    <label class="field">
+      <span class="label">Kullanıcı Adı</span>
+      <input name="username" type="text" placeholder="kullanici" required />
     </label>
-    <label>Şifre
-      <input name="password" type="password" required autocomplete="current-password">
+
+    <label class="field">
+      <span class="label">Şifre</span>
+      <input name="password" type="password" placeholder="••••••••" required />
     </label>
-    <button type="submit" class="btn primary">Giriş Yap</button>
+
+    <button class="btn btn-primary w-full" type="submit">Giriş Yap</button>
   </form>
-  <p class="muted">Admin ilk kullanıcı: <code>{{ request.app.state.get('seed_info','admin / admin123') if false else '' }}</code></p>
-</div>
+
+  <p class="muted mt-4 small">
+    Admin hesabı yoksa .env / Render env ile <code>ADMIN_CODE_USER</code> & <code>ADMIN_CODE_PASS</code> tanımlayın.
+  </p>
+</section>
 {% endblock %}
