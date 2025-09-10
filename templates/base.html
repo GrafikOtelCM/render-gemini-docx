@@ -1,29 +1,40 @@
-<!doctype html>
+<!DOCTYPE html>
 <html lang="tr">
 <head>
-  <meta charset="utf-8">
-  <title>{{ app_name }}</title>
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <link href="/static/styles.css" rel="stylesheet">
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>{{ app_name or "Uygulama" }}</title>
+  <link rel="stylesheet" href="/static/styles.css" />
+  {% if csrf_token %}
+    <meta name="csrf-token" content="{{ csrf_token }}">
+    <script>
+      // JS ile fetch kullanacaksan kolay erişim için:
+      window.CSRF_TOKEN = "{{ csrf_token }}";
+    </script>
+  {% endif %}
 </head>
 <body>
-  <header class="topbar">
-    <div class="brand">{{ app_name }}</div>
-    <nav class="nav">
-      {% if request.session.get("user") %}
-        <a href="/dashboard">Dashboard</a>
-        {% if request.session.get("role") == "admin" %}
-          <a href="/admin/users">Kullanıcılar</a>
-        {% endif %}
-        <a href="/logout">Çıkış</a>
-      {% endif %}
-    </nav>
-  </header>
+  <nav class="topbar">
+    <div class="brand">{{ app_name or "Uygulama" }}</div>
+    <div class="spacer"></div>
+    {% if request.session.get("user") %}
+      <div class="user-pill">👤 {{ request.session.get("user")["username"] }}</div>
+      <form method="POST" action="/logout" class="inline-form">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <button class="btn btn-link">Çıkış</button>
+      </form>
+    {% endif %}
+  </nav>
+
   <main class="container">
+    {% if flash %}
+      <div class="alert">{{ flash }}</div>
+    {% endif %}
     {% block content %}{% endblock %}
   </main>
+
   <footer class="footer">
-    <span>© {{ (now() if false) or "" }}</span>
+    <small>© {{ (now() if now else '') }} {{ app_name or "Uygulama" }}</small>
   </footer>
 </body>
 </html>
