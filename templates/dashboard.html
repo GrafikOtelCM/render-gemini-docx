@@ -20,26 +20,75 @@
   <p class="muted" style="margin-top:8px">
     Model: <b>{{ model }}</b> • Tarifeler: in {{ rate_in }} $/1M, out {{ rate_out }} $/1M • Kur: $1 = ₺{{ usd_try_rate }}
   </p>
-  <p><a class="btn" href="/dashboard.csv">CSV indir</a></p>
+
+  <div style="margin-top:10px; display:flex; gap:10px; align-items:center;">
+    {% if user.role == 'admin' %}
+      <form method="get" action="/dashboard" style="display:flex; gap:8px; align-items:center;">
+        <label>Kullanıcı:</label>
+        <select name="user_id">
+          <option value="all" {{ 'selected' if filter_user_id=='all' else '' }}>Tümü</option>
+          <option value="me" {{ 'selected' if filter_user_id=='me' else '' }}>Ben</option>
+          {% for u in users %}
+            <option value="{{ u[0] }}" {{ 'selected' if (filter_user_id|string)==(u[0]|string) else '' }}>
+              {{ u[1] }} ({{ u[2] }})
+            </option>
+          {% endfor %}
+        </select>
+        <button class="btn btn-secondary" type="submit">Filtrele</button>
+      </form>
+      <a class="btn" href="/logs.xlsx?user_id={{ filter_user_id|urlencode }}">XLSX indir</a>
+    {% else %}
+      <a class="btn" href="/logs.xlsx?user_id=me">XLSX indir</a>
+    {% endif %}
+  </div>
 </div>
 
-<h2>Son 30 Çalıştırma</h2>
+<h2>Son 50 Çalıştırma</h2>
 <div class="table">
   <div class="thead">
-    <div>Tarih</div><div>Ad</div><div>Görsel</div><div>In</div><div>Out</div><div>$</div><div>₺</div>
+    <div>Tarih</div><div>Doküman</div><div>Proje/Otel</div><div>Ay</div>
+    <div>Görsel</div><div>In</div><div>Out</div><div>$</div><div>₺</div>
   </div>
   {% for r in rows %}
     <div class="trow">
       <div>{{ r[0] }}</div>
       <div>{{ r[1] }}</div>
-      <div>{{ r[2] }}</div>
-      <div>{{ r[3] }}</div>
+      <div>{{ r[2] or '-' }}</div>
+      <div>{{ r[3] or '-' }}</div>
       <div>{{ r[4] }}</div>
-      <div>${{ '%.5f'|format(r[5]) }}</div>
-      <div>₺{{ '%.2f'|format(r[6]) }}</div>
+      <div>{{ r[5] }}</div>
+      <div>{{ r[6] }}</div>
+      <div>${{ '%.5f'|format(r[7]) }}</div>
+      <div>₺{{ '%.2f'|format(r[8]) }}</div>
     </div>
   {% else %}
-    <p class="muted">Bu ay henüz kayıt yok.</p>
+    <p class="muted">Kayıt yok.</p>
   {% endfor %}
 </div>
+
+{% if user.role == 'admin' %}
+  <h2>Log Temizleme (Yalnızca Yönetici)</h2>
+  <form action="/admin/clear_logs" method="post" class="card" style="max-width:520px">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <div class="grid2">
+      <div class="field">
+        <label>Kaç günden eski silinsin?</label>
+        <input type="number" min="1" name="older_than_days" placeholder="Örn: 60">
+      </div>
+      <div class="field">
+        <label>Kullanıcı</label>
+        <select name="user_id">
+          <option value="all">Tümü</option>
+          {% for u in users %}
+            <option value="{{ u[0] }}">{{ u[1] }} ({{ u[2] }})</option>
+          {% endfor %}
+        </select>
+      </div>
+    </div>
+    <div class="form-actions">
+      <button class="btn btn-secondary" type="submit">Sil</button>
+    </div>
+    <p class="muted">Dikkat: Bu işlem geri alınamaz.</p>
+  </form>
+{% endif %}
 {% endblock %}
