@@ -1,51 +1,46 @@
 {% extends "base.html" %}
 {% block content %}
-<section class="card">
-  <h1 class="card-title">Planlama Oluştur</h1>
-  <form id="plan-form" class="form-grid">
+<div class="card">
+  <h2>Plan Oluştur</h2>
+  <form id="planForm" class="form" method="post" action="/create-plan" enctype="multipart/form-data">
     <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
 
-    <label class="field">
-      <span class="label">Dosya Adı</span>
-      <input class="input" name="file_name" placeholder="otel_plani.docx" />
-    </label>
+    <div class="grid">
+      <label>Otel Adı
+        <input name="hotel_name" placeholder="Örn. Grafik Otel" required>
+      </label>
 
-    <label class="field">
-      <span class="label">Ay Seçimi</span>
-      <select class="input" name="month" required>
-        <option value="" disabled selected>Bir ay seçin…</option>
-        {% for code, name in months %}
-          <option value="{{ code }}">{{ name }}</option>
-        {% endfor %}
-      </select>
-    </label>
+      <label>Ay Seçimi
+        <input name="month" type="month" required>
+      </label>
 
-    <label class="field">
-      <span class="label">Kaç günde bir?</span>
-      <input class="input" type="number" min="1" value="1" name="every_days" required />
-    </label>
+      <label>Dosya Adı
+        <input name="file_name" placeholder="otel-plani">
+      </label>
 
-    <label class="field col-span-2">
-      <span class="label">Otel İletişim Bilgisi</span>
-      <textarea class="input" name="hotel_contact" rows="3" placeholder="Ad, telefon, e-posta, adres…"></textarea>
-    </label>
+      <label>Kaç Günde 1?
+        <input name="frequency_days" type="number" value="1" min="1" step="1" required>
+      </label>
 
-    <div class="col-span-2">
-      <span class="label">Görseller</span>
-      <div id="dropzone" class="dropzone" tabindex="0">
-        <input id="images" name="images" type="file" accept="image/*" multiple hidden />
-        <div class="dz-hint">
-          <strong>Dosyaları bırakın</strong> veya <button type="button" class="btn btn-ghost" id="pickBtn">Seç</button>
-          <div class="muted">JPG/PNG desteklenir. Küçük önizlemeler aşağıda gözükecek.</div>
-        </div>
+      <label class="col-span-2">Otel İletişim (isteğe bağlı)
+        <input name="contact_info" placeholder="Telefon / E-posta / Not">
+      </label>
+    </div>
+
+    <div class="dropzone" id="dropzone">
+      <input id="imageInput" name="images" type="file" multiple accept="image/*" hidden>
+      <div id="dz-instructions">
+        Görselleri buraya sürükleyip bırakın ya da <button type="button" class="btn ghost" id="pickBtn">Seç</button>
       </div>
       <div id="thumbs" class="thumbs"></div>
     </div>
 
-    <div class="actions col-span-2">
-      <button class="btn btn-primary" id="submitBtn" type="submit">Planı Oluştur</button>
-      <button class="btn btn-ghost" type="reset" id="resetBtn">Temizle</button>
+    <div class="actions">
+      <button type="submit" class="btn primary">Planı Oluştur (DOCX indir)</button>
     </div>
   </form>
-</section>
+
+  <p class="muted">Not: Render Free diskte kalıcı saklama yok; dosya oluşturulup hemen indirilecektir.</p>
+</div>
+<script src="/static/app.js"></script>
 {% endblock %}
