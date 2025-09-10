@@ -1,47 +1,47 @@
 import os
-import io
 import sqlite3
 import secrets
+import io
 from datetime import datetime
-from typing import List, Optional
+from typing import Optional, List
 
-from fastapi import FastAPI, Request, Form, UploadFile, File, HTTPException
+from fastapi import FastAPI, Request, Form, UploadFile, File, Depends
 from fastapi.responses import HTMLResponse, RedirectResponse, StreamingResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
+from fastapi.templating import Jinja2Templates
 from starlette.middleware.sessions import SessionMiddleware
 from starlette.middleware.base import BaseHTTPMiddleware
-from starlette.templating import Jinja2Templates
 from passlib.hash import bcrypt
+from pydantic import BaseModel
 
-# -----------------------------------------------------------------------------
-# ENV & CONSTANTS
-# -----------------------------------------------------------------------------
+from docx import Document
+from docx.shared import Inches
+
+# ========= Config =========
 APP_NAME = os.getenv("APP_NAME", "Otel Planlama Stüdyosu")
 SECRET_KEY = os.getenv("SECRET_KEY", "change-me-please")
 USAGE_DB_PATH = os.getenv("USAGE_DB_PATH", "/tmp/usage.db")
 
-ADMIN_CODE_USER = os.getenv("ADMIN_CODE_USER", "admin")
-ADMIN_CODE_PASS = os.getenv("ADMIN_CODE_PASS", "admin123")
+ADMIN_SEED_USER = os.getenv("ADMIN_CODE_USER", "admin")
+ADMIN_SEED_PASS = os.getenv("ADMIN_CODE_PASS", "admin123")
 
-MONTHS = [
-    ("01", "Ocak"), ("02", "Şubat"), ("03", "Mart"), ("04", "Nisan"),
-    ("05", "Mayıs"), ("06", "Haziran"), ("07", "Temmuz"), ("08", "Ağustos"),
-    ("09", "Eylül"), ("10", "Ekim"), ("11", "Kasım"), ("12", "Aralık"),
-]
+# ========= Paths =========
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+TEMPLATES_DIR = os.path.join(BASE_DIR, "templates")
+STATIC_DIR = os.path.join(BASE_DIR, "static")
 
-# -----------------------------------------------------------------------------
-# APP
-# -----------------------------------------------------------------------------
+os.makedirs(os.path.dirname(USAGE_DB_PATH), exist_ok=True)
+os.makedirs(TEMPLATES_DIR, exist_ok=True)
+os.makedirs(STATIC_DIR, exist_ok=True)
+
+# ========= App =========
 app = FastAPI(title=APP_NAME)
-app.add_middleware(SessionMiddleware, secret_key=SECRET_KEY, same_site="lax")
+app.add_middleware(SessionMiddleware, secret_key=SECRET_KEY, same_site="lax", https_only=False)
+templates = Jinja2Templates(directory=TEMPLATES_DIR)
+app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
-templates = Jinja2Templates(directory="templates")
-app.mount("/static", StaticFiles(directory="static"), name="static")
 
-
-# -----------------------------------------------------------------------------
-# DB
-# -----------------------------------------------------------------------------
+# ========= DB =========
 def get_db():
     conn = sqlite3.connect(USAGE_DB_PATH, timeout=30, check_same_thread=False)
     conn.execute("PRAGMA journal_mode=WAL;")
@@ -51,7 +51,6 @@ def get_db():
 def ensure_db():
     conn = get_db()
     cur = conn.cursor()
-    # users
     cur.execute(
         """
         CREATE TABLE IF NOT EXISTS users (
@@ -63,53 +62,21 @@ def ensure_db():
         )
         """
     )
-    # usage (opsiyonel)
-    cur.execute(
-        """
-        CREATE TABLE IF NOT EXISTS usage_log (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            username TEXT,
-            action TEXT,
-            meta TEXT,
-            created_at TEXT NOT NULL
-        )
-        """
-    )
     conn.commit()
 
-    # seed admin
-    cur.execute("SELECT id FROM users WHERE username = ?", (ADMIN_CODE_USER,))
-    if cur.fetchone() is None:
+    # Seed admin if not exists
+    cur.execute("SELECT id FROM users WHERE username = ?", (ADMIN_SEED_USER,))
+    if not cur.fetchone():
         cur.execute(
             "INSERT INTO users (username, password_hash, role, created_at) VALUES (?, ?, ?, ?)",
-            (ADMIN_CODE_USER, bcrypt.hash(ADMIN_CODE_PASS), "admin", datetime.utcnow().isoformat()),
+            (ADMIN_SEED_USER, bcrypt.using(rounds=12).hash(ADMIN_SEED_PASS), "admin", datetime.utcnow().isoformat()),
         )
         conn.commit()
     conn.close()
 
 
-@app.on_event("startup")
-def _startup():
-    ensure_db()
-    print(f"[INFO] Using DB at: {USAGE_DB_PATH}")
-
-
-# -----------------------------------------------------------------------------
-# HELPERS: auth, csrf, context
-# -----------------------------------------------------------------------------
-def current_user(request: Request) -> Optional[dict]:
-    return request.session.get("user")
-
-
-def require_login(request: Request) -> dict:
-    user = current_user(request)
-    if not user:
-        nxt = request.url.path
-        raise HTTPException(status_code=303, detail="redirect", headers={"Location": f"/login?next={nxt}"})
-    return user
-
-
-def ensure_csrf(request: Request) -> str:
+# ========= CSRF =========
+def get_csrf_token(request: Request) -> str:
     token = request.session.get("csrf_token")
     if not token:
         token = secrets.token_urlsafe(32)
@@ -117,318 +84,295 @@ def ensure_csrf(request: Request) -> str:
     return token
 
 
-def check_csrf(request: Request, token_from_form: str):
+def verify_csrf(request: Request, token_from_form: str):
     token = request.session.get("csrf_token")
-    if not token or not token_from_form or secrets.compare_digest(token, token_from_form) is False:
-        raise HTTPException(status_code=400, detail="CSRF doğrulaması başarısız")
+    if not token or not token_from_form or token_from_form != token:
+        raise ValueError("CSRF doğrulaması başarısız")
 
 
-def log_usage(username: str, action: str, meta: str = ""):
-    try:
-        conn = get_db()
-        conn.execute(
-            "INSERT INTO usage_log (username, action, meta, created_at) VALUES (?, ?, ?, ?)",
-            (username, action, meta[:1000], datetime.utcnow().isoformat()),
-        )
-        conn.commit()
-        conn.close()
-    except Exception:
-        pass  # kullanım logu kritik değil
+# ========= Auth Helpers =========
+def current_user(request: Request) -> Optional[dict]:
+    return request.session.get("user")
 
 
-# İsteğe bağlı: tüm template render'larına ortak context
-class ContextMiddleware(BaseHTTPMiddleware):
+def require_role(user: Optional[dict], role: str) -> bool:
+    return bool(user and user.get("role") == role)
+
+
+# ========= Auth Guard Middleware =========
+PUBLIC_PATHS = {"/login", "/health", "/healthz", "/static"}
+
+
+class AuthRequiredMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
-        # CSRF token her istekte hazır olsun
-        ensure_csrf(request)
-        response = await call_next(request)
-        return response
+        path = request.url.path
+        is_public = path == "/" and False  # root korumalı
+        if any(path == p or path.startswith(p + "/") for p in PUBLIC_PATHS):
+            return await call_next(request)
+
+        # Korumalı yollar: /, /admin, /create-plan, /logout, ... hepsi
+        user = current_user(request)
+        if not user and path != "/login":
+            return RedirectResponse(url="/login", status_code=302)
+
+        # Admin alanı kontrolü
+        if path.startswith("/admin") and not require_role(user, "admin"):
+            return RedirectResponse(url="/", status_code=302)
+
+        return await call_next(request)
 
 
-app.add_middleware(ContextMiddleware)
+app.add_middleware(AuthRequiredMiddleware)
 
 
-# -----------------------------------------------------------------------------
-# ROUTES: health
-# -----------------------------------------------------------------------------
+# ========= Schemas (yalın) =========
+class CreateUserForm(BaseModel):
+    username: str
+    password: str
+    role: str
+
+
+# ========= Routes =========
+@app.on_event("startup")
+def on_startup():
+    ensure_db()
+    print(f"[INFO] Using DB at: {USAGE_DB_PATH}")
+
+
 @app.get("/health", response_class=PlainTextResponse)
 def health():
     return "ok"
 
 
-# -----------------------------------------------------------------------------
-# ROUTES: auth
-# -----------------------------------------------------------------------------
+@app.get("/healthz", response_class=PlainTextResponse)
+def healthz():
+    return "ok"
+
+
+# ---------- Auth ----------
 @app.get("/login", response_class=HTMLResponse)
-def login_form(request: Request, next: str = "/"):
-    if current_user(request):
-        return RedirectResponse(next or "/", status_code=303)
+def login_get(request: Request):
     return templates.TemplateResponse(
         "login.html",
-        {
-            "request": request,
-            "title": APP_NAME,
-            "csrf_token": ensure_csrf(request),
-            "next": next,
-            "user": None,
-        },
+        {"request": request, "csrf_token": get_csrf_token(request), "app_name": APP_NAME},
     )
 
 
 @app.post("/login")
-def login_submit(
+async def login_post(
     request: Request,
     username: str = Form(...),
     password: str = Form(...),
     csrf_token: str = Form(...),
-    next: str = Form("/"),
 ):
-    check_csrf(request, csrf_token)
+    try:
+        verify_csrf(request, csrf_token)
+    except Exception:
+        return RedirectResponse(url="/login?err=csrf", status_code=302)
+
     conn = get_db()
     cur = conn.cursor()
-    cur.execute("SELECT id, username, password_hash, role, created_at FROM users WHERE username = ?", (username,))
+    cur.execute("SELECT id, username, password_hash, role FROM users WHERE username = ?", (username,))
     row = cur.fetchone()
     conn.close()
-
     if not row or not bcrypt.verify(password, row[2]):
-        # yeniden form
-        return templates.TemplateResponse(
-            "login.html",
-            {
-                "request": request,
-                "title": APP_NAME,
-                "csrf_token": ensure_csrf(request),
-                "user": None,
-                "next": next,
-                "error": "Kullanıcı adı veya şifre hatalı.",
-            },
-            status_code=401,
-        )
+        return RedirectResponse(url="/login?err=auth", status_code=302)
 
     request.session["user"] = {"id": row[0], "username": row[1], "role": row[3]}
-    # CSRF rotate
+    # CSRF tazele
     request.session["csrf_token"] = secrets.token_urlsafe(32)
-    log_usage(row[1], "login")
-
-    return RedirectResponse(next or "/", status_code=303)
+    return RedirectResponse(url="/", status_code=302)
 
 
-@app.post("/logout")
 @app.get("/logout")
 def logout(request: Request):
     request.session.clear()
-    return RedirectResponse("/login", status_code=303)
+    return RedirectResponse(url="/login", status_code=302)
 
 
-# -----------------------------------------------------------------------------
-# ROUTES: index (planlama formu)
-# -----------------------------------------------------------------------------
+# ---------- Home / Plan ----------
 @app.get("/", response_class=HTMLResponse)
-def index(request: Request):
+def home(request: Request):
     user = current_user(request)
-    if not user:
-        return RedirectResponse("/login", status_code=303)
-
     return templates.TemplateResponse(
         "index.html",
         {
             "request": request,
-            "title": APP_NAME,
             "user": user,
-            "csrf_token": ensure_csrf(request),
-            "months": MONTHS,
+            "csrf_token": get_csrf_token(request),
+            "app_name": APP_NAME,
         },
     )
 
 
-# -----------------------------------------------------------------------------
-# ROUTE: planla (DOCX üretir ve indirtir)
-# -----------------------------------------------------------------------------
-@app.post("/planla")
-async def planla(
+@app.post("/create-plan")
+async def create_plan(
     request: Request,
-    file_name: str = Form("otel_plani.docx"),
-    month: str = Form(...),
-    every_days: int = Form(...),
-    hotel_contact: str = Form(""),
-    images: List[UploadFile] = File(default=[]),
+    hotel_name: str = Form(...),
+    month: str = Form(...),  # YYYY-MM
+    file_name: str = Form("otel-plani"),
+    frequency_days: int = Form(1),
+    contact_info: str = Form(""),
+    images: List[UploadFile] = File([]),
     csrf_token: str = Form(...),
 ):
-    user = require_login(request)
-    check_csrf(request, csrf_token)
+    # CSRF
+    verify_csrf(request, csrf_token)
 
-    # Ay adı
-    month_name = dict(MONTHS).get(month, month)
-
-    # python-docx ile belge oluştur
-    from docx import Document
-    from docx.shared import Inches, Pt
-    from docx.enum.text import WD_ALIGN_PARAGRAPH
-
+    # DOCX oluştur
     doc = Document()
+    doc.add_heading(f"{hotel_name} - Aylık Plan", level=0)
 
-    # Başlık
-    title = doc.add_heading(f"{APP_NAME} – {month_name}", level=1)
-    title.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    # Ay formatla
+    month_text = month
+    try:
+        month_text = datetime.strptime(month, "%Y-%m").strftime("%B %Y")
+    except Exception:
+        pass
 
-    # Meta
-    p = doc.add_paragraph()
-    p.add_run("Oluşturan: ").bold = True
-    p.add_run(user["username"])
-    p.add_run("   •   Tarih: ").bold = True
-    p.add_run(datetime.now().strftime("%d.%m.%Y %H:%M"))
-    p.add_run("   •   Periyot: ").bold = True
-    p.add_run(f"{every_days} günde bir")
+    doc.add_paragraph(f"Ay: {month_text}")
+    doc.add_paragraph(f"Frekans: {frequency_days} günde 1")
+    if contact_info.strip():
+        doc.add_paragraph(f"İletişim: {contact_info}")
 
-    # Otel iletişim
-    if hotel_contact.strip():
-        doc.add_paragraph().add_run("Otel İletişim").bold = True
-        ct = doc.add_paragraph(hotel_contact.strip())
-        ct_format = ct.runs[0].font
-        ct_format.size = Pt(11)
+    doc.add_paragraph("")
+    doc.add_paragraph("Görseller:")
+    for img in images or []:
+        try:
+            img_bytes = await img.read()
+            if img_bytes:
+                stream = io.BytesIO(img_bytes)
+                # küçük thumbnail gibi ekle (genişlik ~1.6 inch)
+                doc.add_picture(stream, width=Inches(1.6))
+        except Exception:
+            continue
 
-    # Basit bir program çizelgesi örneği
-    doc.add_paragraph().add_run("Program").bold = True
-    tbl = doc.add_table(rows=1, cols=3)
-    hdr_cells = tbl.rows[0].cells
-    hdr_cells[0].text = "Gün"
-    hdr_cells[1].text = "Tarih"
-    hdr_cells[2].text = "Not"
-    # Örnek 5 satır
-    from datetime import date, timedelta
-    today = date.today().replace(day=1)
-    for i in range(5):
-        r = tbl.add_row().cells
-        r[0].text = f"{i+1}"
-        r[1].text = (today + timedelta(days=i*every_days)).strftime("%d.%m.%Y")
-        r[2].text = ""
+    # Plan örnek tablosu
+    doc.add_paragraph("")
+    doc.add_paragraph("Örnek Görev Planı:")
+    table = doc.add_table(rows=1, cols=3)
+    hdr = table.rows[0].cells
+    hdr[0].text = "Tarih"
+    hdr[1].text = "Görev"
+    hdr[2].text = "Not"
 
-    # Görseller
-    if images:
-        doc.add_paragraph().add_run("Görseller").bold = True
-        for img in images:
+    # basit takvim örneği: ay içi, frequency_days’e göre günler
+    try:
+        start_dt = datetime.strptime(month + "-01", "%Y-%m-%d")
+        day = 1
+        while True:
             try:
-                content = await img.read()
-                if not content:
-                    continue
-                # küçük önizleme boyutunda ekle
-                # (2.0 inch genişlik iyi bir thumbnail görünümü)
-                doc.add_picture(io.BytesIO(content), width=Inches(2.0))
-            except Exception:
-                # tek bir görsel hatası tüm işlemi bozmasın
-                pass
+                cur_dt = datetime.strptime(f"{start_dt.year}-{start_dt.month:02d}-{day:02d}", "%Y-%m-%d")
+            except ValueError:
+                break
+            row = table.add_row().cells
+            row[0].text = cur_dt.strftime("%d.%m.%Y")
+            row[1].text = "İçerik / Görsel Hazırlığı"
+            row[2].text = "-"
+            day += frequency_days
+    except Exception:
+        pass
 
-    # Dosya adı uzantısı
-    if not file_name.lower().endswith(".docx"):
-        file_name = f"{file_name}.docx"
-
-    # Bellekten döndür
+    # Bellekte dosya
     buf = io.BytesIO()
     doc.save(buf)
     buf.seek(0)
 
-    # kullanım logu
-    log_usage(user["username"], "planla", f"file={file_name}; month={month_name}; every_days={every_days}")
+    safe_name = (file_name or "otel-plani").strip().replace(" ", "-")
+    if not safe_name.lower().endswith(".docx"):
+        safe_name += ".docx"
 
     headers = {
-        "Content-Disposition": f'attachment; filename="{file_name}"'
+        "Content-Disposition": f'attachment; filename="{safe_name}"'
     }
-    return StreamingResponse(buf, media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document", headers=headers)
+    return StreamingResponse(
+        buf,
+        headers=headers,
+        media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    )
 
 
-# -----------------------------------------------------------------------------
-# ROUTES: admin
-# -----------------------------------------------------------------------------
-def require_admin(request: Request) -> dict:
-    user = require_login(request)
-    if user.get("role") != "admin":
-        raise HTTPException(status_code=403, detail="Yetkisiz")
-    return user
-
-
+# ---------- Admin ----------
 @app.get("/admin", response_class=HTMLResponse)
-def admin_index(request: Request):
-    user = require_admin(request)
+def admin_page(request: Request):
+    user = current_user(request)
+    if not require_role(user, "admin"):
+        return RedirectResponse(url="/", status_code=302)
+
     conn = get_db()
     cur = conn.cursor()
     cur.execute("SELECT id, username, role, created_at FROM users ORDER BY id ASC")
     rows = cur.fetchall()
     conn.close()
     users = [{"id": r[0], "username": r[1], "role": r[2], "created_at": r[3]} for r in rows]
+
     return templates.TemplateResponse(
         "admin.html",
         {
             "request": request,
-            "title": f"{APP_NAME} • Admin",
             "user": user,
-            "csrf_token": ensure_csrf(request),
             "users": users,
+            "csrf_token": get_csrf_token(request),
+            "app_name": APP_NAME,
         },
     )
 
 
 @app.post("/admin/users/create")
-def admin_user_create(
+async def admin_create_user(
     request: Request,
     username: str = Form(...),
     password: str = Form(...),
     role: str = Form("user"),
     csrf_token: str = Form(...),
 ):
-    user = require_admin(request)
-    check_csrf(request, csrf_token)
-
-    if role not in ("user", "admin"):
-        role = "user"
+    user = current_user(request)
+    if not require_role(user, "admin"):
+        return RedirectResponse(url="/", status_code=302)
+    try:
+        verify_csrf(request, csrf_token)
+    except Exception:
+        return RedirectResponse(url="/admin?err=csrf", status_code=302)
 
     conn = get_db()
+    cur = conn.cursor()
     try:
-        conn.execute(
+        cur.execute(
             "INSERT INTO users (username, password_hash, role, created_at) VALUES (?, ?, ?, ?)",
-            (username, bcrypt.hash(password), role, datetime.utcnow().isoformat()),
+            (username, bcrypt.using(rounds=12).hash(password), role, datetime.utcnow().isoformat()),
         )
         conn.commit()
-        log_usage(user["username"], "admin_create_user", f"{username}:{role}")
     except sqlite3.IntegrityError:
         conn.close()
-        raise HTTPException(status_code=400, detail="Kullanıcı adı zaten var")
+        return RedirectResponse(url="/admin?err=exists", status_code=302)
     conn.close()
-    return RedirectResponse("/admin", status_code=303)
+    return RedirectResponse(url="/admin?ok=1", status_code=302)
 
 
 @app.post("/admin/users/delete")
-def admin_user_delete(
+async def admin_delete_user(
     request: Request,
     user_id: int = Form(...),
     csrf_token: str = Form(...),
 ):
-    user = require_admin(request)
-    check_csrf(request, csrf_token)
+    user = current_user(request)
+    if not require_role(user, "admin"):
+        return RedirectResponse(url="/", status_code=302)
+    try:
+        verify_csrf(request, csrf_token)
+    except Exception:
+        return RedirectResponse(url="/admin?err=csrf", status_code=302)
 
     conn = get_db()
-    # Kendini silmesin
     cur = conn.cursor()
+    # admin'i silmeye izin verme
     cur.execute("SELECT username FROM users WHERE id = ?", (user_id,))
     row = cur.fetchone()
-    if not row:
+    if row and row[0] == ADMIN_SEED_USER:
         conn.close()
-        raise HTTPException(status_code=404, detail="Kullanıcı bulunamadı")
-    target_username = row[0]
-    if target_username == user["username"]:
-        conn.close()
-        raise HTTPException(status_code=400, detail="Kendi hesabınızı silemezsiniz")
+        return RedirectResponse(url="/admin?err=cannot_delete_admin", status_code=302)
 
-    conn.execute("DELETE FROM users WHERE id = ?", (user_id,))
+    cur.execute("DELETE FROM users WHERE id = ?", (user_id,))
     conn.commit()
     conn.close()
-    log_usage(user["username"], "admin_delete_user", target_username)
-    return RedirectResponse("/admin", status_code=303)
-
-
-# -----------------------------------------------------------------------------
-# 404/exception basit cevaplar
-# -----------------------------------------------------------------------------
-@app.exception_handler(303)
-def _see_other_handler(request: Request, exc: HTTPException):
-    # FastAPI 303 HTTPException redirect
-    return RedirectResponse(exc.headers.get("Location", "/login"), status_code=303)
+    return RedirectResponse(url="/admin?ok=1", status_code=302)
