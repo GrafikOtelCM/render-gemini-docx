@@ -1,22 +1,25 @@
-{% extends "layout.html" %}
+{% extends "base.html" %}
 {% block content %}
-<div class="card narrow">
-  <h2>Giriş Yap</h2>
-  {% if error %}
-    <div class="alert alert-error">{{ error }}</div>
-  {% endif %}
-  <form method="post" action="/login">
-    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-    <input type="hidden" name="next" value="{{ next or '/' }}">
-    <label>
-      Kullanıcı Adı
-      <input name="username" required>
-    </label>
-    <label>
-      Şifre
-      <input name="password" type="password" required>
-    </label>
-    <button class="btn" type="submit">Giriş</button>
-  </form>
+<div class="center-wrap">
+  <section class="card w-420">
+    <h1 class="card-title">Giriş Yap</h1>
+    {% if error %}
+      <div class="alert">{{ error }}</div>
+    {% endif %}
+    <form method="post" action="/login" class="form-grid">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <input type="hidden" name="next" value="{{ next or '/' }}">
+      <label class="field">
+        <span class="label">Kullanıcı Adı</span>
+        <input class="input" name="username" autocomplete="username" required />
+      </label>
+      <label class="field">
+        <span class="label">Şifre</span>
+        <input class="input" type="password" name="password" autocomplete="current-password" required />
+      </label>
+      <button class="btn btn-primary mt-2" type="submit">Giriş</button>
+    </form>
+    <p class="muted mt-2">Admin kullanıcılarını Admin panelinden ekleyebilirsiniz.</p>
+  </section>
 </div>
 {% endblock %}
