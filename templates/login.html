@@ -1,17 +1,25 @@
 {% extends "base.html" %}
 {% block content %}
-<div class="card">
-  <h1>Giriş</h1>
-  {% if error %}
-    <div class="alert">{{ error }}</div>
-  {% endif %}
-  <form method="post" action="/login" class="form">
-    <input type="hidden" name="next" value="{{ next or '/dashboard' }}">
-    <label>Kullanıcı Adı</label>
-    <input name="username" placeholder="kullanıcı adı" required>
-    <label>Parola</label>
-    <input name="password" type="password" placeholder="parola" required>
-    <button type="submit" class="btn primary">Giriş Yap</button>
-  </form>
+<div class="auth-wrap">
+  <div class="card card-auth">
+    <div class="card-header">Giriş Yap</div>
+    <div class="card-body">
+      <form method="POST" action="/login">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        {% if next %}
+          <input type="hidden" name="next" value="{{ next }}">
+        {% endif %}
+        <div class="form-group">
+          <label for="username">Kullanıcı Adı</label>
+          <input id="username" name="username" type="text" required autocomplete="username">
+        </div>
+        <div class="form-group">
+          <label for="password">Parola</label>
+          <input id="password" name="password" type="password" required autocomplete="current-password">
+        </div>
+        <button type="submit" class="btn btn-primary w-100">Giriş</button>
+      </form>
+    </div>
+  </div>
 </div>
 {% endblock %}
