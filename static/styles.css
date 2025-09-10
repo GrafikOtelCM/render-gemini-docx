@@ -1,34 +1,26 @@
 :root{
-  --bg:#0b0f14; --card:#121821; --text:#e6eef7; --muted:#92a3b5; --brand:#35c2ff; --accent:#6ee7b7; --danger:#ff6b6b; --border:#223045;
+  --bg:#0f172a; --card:#111827; --muted:#94a3b8; --txt:#e5e7eb; --pri:#22c55e; --danger:#ef4444; --accent:#38bdf8;
 }
 *{box-sizing:border-box}
-html,body{margin:0;padding:0;background:var(--bg);color:var(--text);font:16px/1.5 system-ui,-apple-system,Segoe UI,Roboto,Ubuntu}
-a{color:var(--brand);text-decoration:none}
-.container{max-width:1100px;margin:80px auto 40px;padding:0 16px}
-.topbar{position:fixed;top:0;left:0;right:0;height:56px;background:#0d141c;border-bottom:1px solid var(--border);display:flex;align-items:center;justify-content:space-between;padding:0 16px;z-index:10}
-.topbar .brand{font-weight:700;letter-spacing:.3px}
-.topbar nav a{margin-left:16px}
-.footer{border-top:1px solid var(--border);padding:16px;text-align:center;opacity:.7}
-.card{background:var(--card);border:1px solid var(--border);border-radius:14px;padding:16px;box-shadow:0 10px 24px rgba(0,0,0,.2);margin-bottom:16px}
-.card h1,.card h2{margin:0 0 12px}
-.alert{background:rgba(255,107,107,.1);border:1px solid var(--danger);padding:8px 10px;border-radius:8px;margin:10px 0}
-.success{background:rgba(110,231,183,.12);border:1px solid var(--accent);padding:8px 10px;border-radius:8px;margin:10px 0}
-.muted{color:var(--muted);font-size:.9em}
-.row{display:grid;grid-template-columns:repeat(3,1fr);gap:10px}
-.grid{display:grid;grid-template-columns:2fr 1fr;gap:16px}
-@media (max-width:980px){.grid{grid-template-columns:1fr}.row{grid-template-columns:1fr 1fr}.topbar{position:static}.container{margin-top:20px}}
-label{display:block;margin:8px 0 4px}
-input,select,button{width:100%;padding:10px 12px;border:1px solid var(--border);border-radius:10px;background:#0f1520;color:var(--text)}
-input:focus,select:focus{outline:none;border-color:var(--brand)}
-button{background:linear-gradient(180deg,#1f2937,#0f172a);cursor:pointer}
-button:hover{filter:brightness(1.1)}
-button.danger{border-color:var(--danger);color:#ffdede}
-.badge{padding:2px 8px;border-radius:999px;border:1px solid var(--border);font-size:.85em}
-.badge.admin{border-color:#f59e0b;color:#fde68a}
-.badge.staff{border-color:#60a5fa;color:#bfdbfe}
+body{margin:0;font-family:ui-sans-serif,system-ui,-apple-system,Segoe UI,Roboto,Arial;color:var(--txt);background:linear-gradient(180deg,#0b1020,#0f172a)}
+a{color:var(--accent);text-decoration:none}
+.topbar{display:flex;justify-content:space-between;align-items:center;padding:14px 18px;background:#0b1225;border-bottom:1px solid #1f2937;position:sticky;top:0}
+.brand{font-weight:700;letter-spacing:.4px}
+.nav a{margin-left:14px}
+.container{max-width:1100px;margin:24px auto;padding:0 16px}
+.grid{display:grid;grid-template-columns:1fr;gap:16px}
+@media(min-width:960px){.grid{grid-template-columns:1fr 1fr}}
+.card{background:rgba(17,24,39,.8);backdrop-filter:blur(8px);border:1px solid #1f2937;border-radius:16px;padding:18px;box-shadow:0 10px 30px rgba(0,0,0,.25)}
+h1,h2{margin:0 0 12px}
+.form label{display:block;margin:10px 0 6px;color:var(--muted);font-size:.95rem}
+.form input,.form select{width:100%;padding:10px 12px;border-radius:10px;border:1px solid #1f2937;background:#0b1220;color:var(--txt)}
+.form .row{display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px}
+.btn{padding:10px 14px;border-radius:10px;border:1px solid transparent;background:#1f2937;color:var(--txt);cursor:pointer}
+.btn.primary{background:var(--pri);color:#06120a;font-weight:700}
+.btn.danger{background:var(--danger);color:#240a0a}
+.alert{background:#3b0f0f;color:#ffb4b4;border:1px solid #7f1d1d;padding:10px;border-radius:10px;margin:10px 0}
 .table{width:100%;border-collapse:collapse}
-.table th,.table td{border-bottom:1px solid var(--border);padding:8px 6px;font-size:.95em}
-.auth{max-width:420px;margin:0 auto}
-.actions{display:flex;gap:10px;margin-top:12px}
-.preview{margin-top:10px;font-size:.95em;color:var(--muted)}
-.result{margin-top:10px}
+.table th,.table td{border-bottom:1px solid #1f2937;padding:10px;text-align:left}
+.muted{color:var(--muted)}
+.footer{padding:20px 16px;color:var(--muted);text-align:center}
+.help{color:var(--muted);font-size:.9rem;margin:6px 0 12px}
