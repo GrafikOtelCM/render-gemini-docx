@@ -1,52 +1,76 @@
-<!doctype html>
-<html lang="tr">
-<head>
-<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<link rel="stylesheet" href="/static/styles.css">
-<title>Plan Oluştur</title>
-</head>
-<body class="container">
-  <header class="topbar">
-    <div class="brand">{{ app_name }}</div>
-    <nav><a href="/dashboard">Dashboard</a> • <a href="/logout">Çıkış</a></nav>
-  </header>
-
-  <div class="card">
-    <h1>DOCX Plan Oluştur</h1>
-    <form id="genForm" method="post" action="/generate" enctype="multipart/form-data">
-      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-
-      <div class="grid">
-        <div>
-          <label>Doküman Adı</label>
-          <input name="doc_name" value="{{ suggested_name }}" required>
+{% extends "base.html" %}
+{% block content %}
+<div class="grid-2">
+  <section class="card">
+    <div class="card-header">Plan Oluştur</div>
+    <div class="card-body">
+      <form id="planForm" method="POST" action="/plan" enctype="multipart/form-data">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <div class="form-group">
+          <label for="hotel_name">Otel Adı</label>
+          <input id="hotel_name" name="hotel_name" type="text" required placeholder="Örn: Martı Prime">
         </div>
-        <div>
-          <label>Proje/Otel Etiketi</label>
-          <input name="project_tag" placeholder="Martı Prime, vb.">
+
+        <div class="form-group">
+          <label for="plan_month">Planlama Ayı</label>
+          <input id="plan_month" name="plan_month" type="month" required>
         </div>
+
+        <div class="form-group">
+          <label for="interval_days">Kaç günde bir paylaşım?</label>
+          <select id="interval_days" name="interval_days" required>
+            <option value="1">Her gün</option>
+            <option value="2">2 günde bir</option>
+            <option value="3">3 günde bir</option>
+            <option value="4">4 günde bir</option>
+            <option value="5">5 günde bir</option>
+            <option value="7">Haftada bir</option>
+          </select>
+        </div>
+
+        <div class="form-group">
+          <label for="images">Görseller (en fazla 10 önerilir)</label>
+          <input id="images" name="images" type="file" accept="image/*" multiple required />
+          <small id="fileCount">Seçili dosya: 0</small>
+        </div>
+
+        <div class="form-group">
+          <label for="tone">Açıklama Tonu</label>
+          <select id="tone" name="tone">
+            <option>Kurumsal</option>
+            <option>Samimi</option>
+            <option>Dinamik</option>
+          </select>
+        </div>
+
+        <button type="submit" class="btn btn-primary">Oluştur &amp; İndir</button>
+      </form>
+    </div>
+  </section>
+
+  <section class="card">
+    <div class="card-header">Kullanım &amp; Limit</div>
+    <div class="card-body">
+      <div class="stat-row">
+        <div>Bu Ay Oluşturulan DOCX</div>
+        <strong>{{ stats.month_docs or 0 }}</strong>
       </div>
-
-      <div class="grid">
-        <div>
-          <label>Plan Ayı</label>
-          <input type="month" name="plan_month" value="{{ default_month }}" required>
-        </div>
-        <div>
-          <label>Kaç günde bir paylaşım?</label>
-          <input type="number" name="interval_days" min="1" value="1" required>
-        </div>
+      <div class="stat-row">
+        <div>Tahmini Maliyet (₺)</div>
+        <strong>{{ stats.estimate_try or '—' }}</strong>
       </div>
+      <div class="muted">* Maliyet tahmini ENV oranlarına göre hesaplanır.</div>
+    </div>
+  </section>
+</div>
 
-      <label>İletişim Bilgisi (caption altına eklenecek)</label>
-      <textarea name="contact_info" rows="3" placeholder="Tel, web, konum..."></textarea>
-
-      <label>Görseller (en fazla 10)</label>
-      <input type="file" name="files" accept="image/*" multiple required>
-      <p class="hint">Seçtiğiniz sırayla tarihlere yerleştirilecektir (1–29 arası).</p>
-
-      <button class="btn primary" type="submit">Oluştur & İndir</button>
-    </form>
-  </div>
-</body>
-</html>
+<script>
+  const images = document.getElementById('images');
+  const fileCount = document.getElementById('fileCount');
+  if (images && fileCount) {
+    images.addEventListener('change', () => {
+      fileCount.textContent = `Seçili dosya: ${images.files.length}`;
+    });
+  }
+</script>
+{% endblock %}
