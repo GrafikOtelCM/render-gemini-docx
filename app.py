@@ -34,7 +34,7 @@ os.makedirs(STATIC_DIR, exist_ok=True)
 
 # ========= App =========
 app = FastAPI(title=APP_NAME)
-# Session middleware MUTLAKA yüklü (cookie tabanlı oturum)
+# Session middleware
 app.add_middleware(SessionMiddleware, secret_key=SECRET_KEY, same_site="lax", https_only=False)
 templates = Jinja2Templates(directory=TEMPLATES_DIR)
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
@@ -91,12 +91,10 @@ def verify_csrf(request: Request, token_from_form: str):
 
 # ========= Auth Helpers =========
 def current_user(request: Request) -> Optional[dict]:
-    # SessionMiddleware yüklü; burada güvenle erişebiliriz
     return request.session.get("user")
 
 
 def require_login_redirect(request: Request) -> Optional[RedirectResponse]:
-    """Giriş yapılmamışsa login'e yönlendiren yardımcı."""
     if not current_user(request):
         return RedirectResponse(url="/login", status_code=302)
     return None
@@ -126,10 +124,15 @@ def healthz():
     return "ok"
 
 
+# Render/ELB vs HEAD kontrolü 405 olmasın
+@app.head("/", response_class=PlainTextResponse)
+def head_root():
+    return PlainTextResponse("ok")
+
+
 # ---------- Auth ----------
 @app.get("/login", response_class=HTMLResponse)
 def login_get(request: Request):
-    # Zaten girişliyse ana sayfaya at
     if current_user(request):
         return RedirectResponse(url="/", status_code=302)
     return templates.TemplateResponse(
@@ -159,7 +162,6 @@ async def login_post(
         return RedirectResponse(url="/login?err=auth", status_code=302)
 
     request.session["user"] = {"id": row[0], "username": row[1], "role": row[3]}
-    # CSRF tazele
     request.session["csrf_token"] = secrets.token_urlsafe(32)
     return RedirectResponse(url="/", status_code=302)
 
@@ -173,7 +175,6 @@ def logout(request: Request):
 # ---------- Home / Plan ----------
 @app.get("/", response_class=HTMLResponse)
 def home(request: Request):
-    # Giriş zorunlu
     redir = require_login_redirect(request)
     if redir:
         return redir
@@ -201,19 +202,15 @@ async def create_plan(
     images: List[UploadFile] = File([]),
     csrf_token: str = Form(...),
 ):
-    # Giriş zorunlu
     redir = require_login_redirect(request)
     if redir:
         return redir
 
-    # CSRF
     verify_csrf(request, csrf_token)
 
-    # DOCX oluştur
     doc = Document()
     doc.add_heading(f"{hotel_name} - Aylık Plan", level=0)
 
-    # Ay formatla
     month_text = month
     try:
         month_text = datetime.strptime(month, "%Y-%m").strftime("%B %Y")
@@ -232,12 +229,10 @@ async def create_plan(
             img_bytes = await img.read()
             if img_bytes:
                 stream = io.BytesIO(img_bytes)
-                # küçük thumbnail gibi ekle (genişlik ~1.6 inch)
                 doc.add_picture(stream, width=Inches(1.6))
         except Exception:
             continue
 
-    # Plan örnek tablosu
     doc.add_paragraph("")
     doc.add_paragraph("Örnek Görev Planı:")
     table = doc.add_table(rows=1, cols=3)
@@ -246,7 +241,6 @@ async def create_plan(
     hdr[1].text = "Görev"
     hdr[2].text = "Not"
 
-    # basit takvim örneği: ay içi, frequency_days’e göre günler
     try:
         start_dt = datetime.strptime(month + "-01", "%Y-%m-%d")
         day = 1
@@ -263,7 +257,6 @@ async def create_plan(
     except Exception:
         pass
 
-    # Bellekte dosya
     buf = io.BytesIO()
     doc.save(buf)
     buf.seek(0)
@@ -272,9 +265,7 @@ async def create_plan(
     if not safe_name.lower().endswith(".docx"):
         safe_name += ".docx"
 
-    headers = {
-        "Content-Disposition": f'attachment; filename="{safe_name}"'
-    }
+    headers = {"Content-Disposition": f'attachment; filename="{safe_name}"'}
     return StreamingResponse(
         buf,
         headers=headers,
@@ -355,7 +346,6 @@ async def admin_delete_user(
 
     conn = get_db()
     cur = conn.cursor()
-    # admin'i silmeye izin verme
     cur.execute("SELECT username FROM users WHERE id = ?", (user_id,))
     row = cur.fetchone()
     if row and row[0] == ADMIN_SEED_USER:
