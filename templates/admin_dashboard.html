@@ -1,54 +1,52 @@
 {% extends "base.html" %}
 {% block content %}
-<h2>Admin Dashboard</h2>
+<h2>Kullanıcı Yönetimi</h2>
 
-<div class="grid cols-2 gap">
+<div class="grid-2">
   <div class="card">
-    <h3>Kullanıcı Oluştur</h3>
-    <form method="post" action="/admin/users/create" class="grid gap">
-      <input type="hidden" name="csrf_token" value="{{ get_csrf_token(request) }}">
+    <h3>Yeni Kullanıcı Oluştur</h3>
+    <form method="post" action="/admin/users/create" class="stack">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}" />
       <label>
         <span>Kullanıcı Adı</span>
-        <input name="new_username" required>
+        <input name="username" required />
       </label>
       <label>
         <span>Şifre</span>
-        <input type="password" name="new_password" required>
+        <input name="password" type="password" required />
       </label>
       <label>
         <span>Rol</span>
-        <select name="new_role">
-          <option value="staff" selected>Staff</option>
-          <option value="admin">Admin</option>
+        <select name="role">
+          <option value="user">user</option>
+          <option value="admin">admin</option>
         </select>
       </label>
-      <button class="btn primary">Ekle</button>
+      <button class="btn-primary" type="submit">Oluştur</button>
     </form>
   </div>
 
   <div class="card">
-    <h3>Kullanıcı Listesi</h3>
+    <h3>Mevcut Kullanıcılar</h3>
     <table class="table">
-      <thead><tr><th>ID</th><th>Kullanıcı</th><th>Rol</th><th></th></tr></thead>
+      <thead>
+        <tr><th>ID</th><th>Kullanıcı</th><th>Rol</th><th>İşlem</th></tr>
+      </thead>
       <tbody>
-        {% for u in users %}
+      {% for u in users %}
         <tr>
           <td>{{ u.id }}</td>
           <td>{{ u.username }}</td>
-          <td><span class="badge">{{ u.role }}</span></td>
+          <td>{{ u.role }}</td>
           <td>
-            {% if u.username != request.session['user']['username'] %}
-            <form method="post" action="/admin/users/delete" onsubmit="return confirm('Silinsin mi?')" class="inline">
-              <input type="hidden" name="csrf_token" value="{{ get_csrf_token(request) }}">
-              <input type="hidden" name="user_id" value="{{ u.id }}">
-              <button class="btn danger">Sil</button>
+            <form method="post" action="/admin/users/delete" class="inline">
+              <input type="hidden" name="csrf_token" value="{{ csrf_token }}" />
+              <input type="hidden" name="user_id" value="{{ u.id }}" />
+              <button class="btn-danger" type="submit">Sil</button>
             </form>
-            {% else %}
-            <span class="muted">Kendiniz</span>
-            {% endif %}
           </td>
         </tr>
-        {% endfor %}
+      {% endfor %}
       </tbody>
     </table>
   </div>
