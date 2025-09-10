@@ -1,30 +1,29 @@
 <!doctype html>
 <html lang="tr">
 <head>
-  <meta charset="utf-8" />
+  <meta charset="utf-8">
   <title>{{ app_name }}</title>
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <link rel="stylesheet" href="/static/styles.css" />
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <link href="/static/styles.css" rel="stylesheet">
 </head>
 <body>
-<header class="topbar">
-  <div class="brand">{{ app_name }}</div>
-  <nav>
-    {% if request.session.get("uid") %}
-      <a href="/dashboard">Dashboard</a>
-      {% if request.session.get("role") == "admin" %}
-        <a href="/users">Kullanıcılar</a>
+  <header class="topbar">
+    <div class="brand">{{ app_name }}</div>
+    <nav class="nav">
+      {% if request.session.get("user") %}
+        <a href="/dashboard">Dashboard</a>
+        {% if request.session.get("role") == "admin" %}
+          <a href="/admin/users">Kullanıcılar</a>
+        {% endif %}
+        <a href="/logout">Çıkış</a>
       {% endif %}
-      <a href="/logs/export">Log İndir</a>
-      <a class="logout" href="/logout">Çıkış</a>
-    {% endif %}
-  </nav>
-</header>
-<main class="container">
-  {% block content %}{% endblock %}
-</main>
-<footer class="footer">
-  <small>© {{ now().year }} TatilBudur · İstanbul</small>
-</footer>
+    </nav>
+  </header>
+  <main class="container">
+    {% block content %}{% endblock %}
+  </main>
+  <footer class="footer">
+    <span>© {{ (now() if false) or "" }}</span>
+  </footer>
 </body>
 </html>
