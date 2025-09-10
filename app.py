@@ -38,8 +38,7 @@ IMG_JPEG_QUALITY = 80
 
 DEFAULT_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "AIzaSyDdUV3SuQ1bbhqILvR_70wGRSMdDGkOoNI")
-SECRET_KEY = os.getenv("SECRET_KEY", "kJx2Jesr0Aq_R4oSdfaYBMKu4FDlWkslyZ_DH-nCxUzMaiOEO9Jl8XuRrSXzoF8del4cUjQ-lZxOFrmP4jYmXQ
-")
+SECRET_KEY = os.getenv("SECRET_KEY", "kJx2Jesr0Aq_R4oSdfaYBMKu4FDlWkslyZ_DH-nCxUzMaiOEO9Jl8XuRrSXzoF8del4cUjQ-lZxOFrmP4jYmXQ")
 
 # Ücretler (USD / 1M token)
 RATE_IN_PER_MTOK  = float(os.getenv("RATE_IN_PER_MTOK",  "0.30"))
