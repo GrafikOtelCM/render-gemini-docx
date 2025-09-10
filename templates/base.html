@@ -1,40 +1,36 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="tr">
 <head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>{{ app_name or "Uygulama" }}</title>
-  <link rel="stylesheet" href="/static/styles.css" />
-  {% if csrf_token %}
-    <meta name="csrf-token" content="{{ csrf_token }}">
-    <script>
-      // JS ile fetch kullanacaksan kolay erişim için:
-      window.CSRF_TOKEN = "{{ csrf_token }}";
-    </script>
-  {% endif %}
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <meta name="csrf-token" content="{{ get_csrf_token(request) }}">
+  <title>{{ APP_NAME }}</title>
+  <link rel="stylesheet" href="/static/styles.css">
+  <script defer src="/static/app.js"></script>
 </head>
 <body>
-  <nav class="topbar">
-    <div class="brand">{{ app_name or "Uygulama" }}</div>
-    <div class="spacer"></div>
-    {% if request.session.get("user") %}
-      <div class="user-pill">👤 {{ request.session.get("user")["username"] }}</div>
-      <form method="POST" action="/logout" class="inline-form">
-        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-        <button class="btn btn-link">Çıkış</button>
-      </form>
-    {% endif %}
-  </nav>
+  <header class="topbar">
+    <div class="brand">{{ APP_NAME }}</div>
+    <nav class="nav">
+      {% if request.session.get('user') %}
+        <span class="badge">{{ request.session['user']['username'] }} • {{ request.session['user']['role'] }}</span>
+        {% if request.session['user']['role'] == 'admin' %}
+          <a class="btn btn-ghost" href="/admin/dashboard">Admin</a>
+        {% endif %}
+        <form method="post" action="/logout" class="inline">
+          <input type="hidden" name="csrf_token" value="{{ get_csrf_token(request) }}">
+          <button class="btn">Çıkış</button>
+        </form>
+      {% endif %}
+    </nav>
+  </header>
 
   <main class="container">
-    {% if flash %}
-      <div class="alert">{{ flash }}</div>
-    {% endif %}
     {% block content %}{% endblock %}
   </main>
 
   <footer class="footer">
-    <small>© {{ (now() if now else '') }} {{ app_name or "Uygulama" }}</small>
+    <small>© {{ now().year if now else '' }} Tatil & Sosyal Medya Operasyon</small>
   </footer>
 </body>
 </html>
