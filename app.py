@@ -2,577 +2,368 @@ import os
 import sqlite3
 import secrets
 import time
+from pathlib import Path
 from typing import Optional
 
-from fastapi import FastAPI, Request, Form, HTTPException, status, Depends
-from fastapi.responses import (
-    HTMLResponse,
-    JSONResponse,
-    RedirectResponse,
-    Response,
-    PlainTextResponse,
+from fastapi import (
+    FastAPI, Request, Form, Depends, UploadFile, File, HTTPException
 )
+from fastapi.responses import HTMLResponse, RedirectResponse, Response, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from starlette.middleware.sessions import SessionMiddleware
 from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.datastructures import URL
+import bcrypt
 
-# ==========
-# ENV & CONST
-# ==========
+# ────────────────────────────────────────────────────────────────────────────────
+# ENV / CONFIG
+# ────────────────────────────────────────────────────────────────────────────────
 APP_NAME = os.getenv("APP_NAME", "Otel Planlama Stüdyosu")
-# Render Free: kalıcı disk yok; SQLite'ı /tmp'te tutuyoruz
-USAGE_DB_PATH = os.getenv("USAGE_DB_PATH", "/tmp/usage.db")
+SECRET_KEY = os.getenv("SECRET_KEY", secrets.token_urlsafe(48))
 
-# Güvenlik
-SECRET_KEY = os.getenv(
-    "SECRET_KEY",
-    # Yedek anahtar: prod'da mutlaka ENV ile verin.
-    "dev-" + secrets.token_urlsafe(48),
-)
+# Render free plan: kalıcı disk yok -> /tmp
+USAGE_DB_PATH = os.getenv("USAGE_DB_PATH", "/tmp/usage.db")
 
 # Admin tohumlama (opsiyonel)
 ADMIN_CODE_USER = os.getenv("ADMIN_CODE_USER", "admin")
 ADMIN_CODE_PASS = os.getenv("ADMIN_CODE_PASS", "admin123")
 
-# Opsiyonel: log etiketi
-LOG_TAG = os.getenv("APP_LOG_TAG", "Martı Prime")
+BASE_DIR = Path(__file__).parent
+TEMPLATES_DIR = BASE_DIR / "templates"
+STATIC_DIR = BASE_DIR / "static"
 
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-TEMPLATES_DIR = os.path.join(BASE_DIR, "templates")
-STATIC_DIR = os.path.join(BASE_DIR, "static")
+# Klasörler mevcut mu?
+TEMPLATES_DIR.mkdir(exist_ok=True)
+STATIC_DIR.mkdir(exist_ok=True)
 
-# ==========
+# ────────────────────────────────────────────────────────────────────────────────
 # APP
-# ==========
+# ────────────────────────────────────────────────────────────────────────────────
 app = FastAPI(title=APP_NAME)
 
-# Session middleware mutlaka ÖNCE eklensin ki diğer middleware/handler'lar request.session'a erişebilsin
+# Session cookie (mutlaka ilk eklensin)
 app.add_middleware(
     SessionMiddleware,
     secret_key=SECRET_KEY,
-    https_only=True,          # Render prod'da TLS var
+    session_cookie="ops_session",
     same_site="lax",
-    max_age=60 * 60 * 8,      # 8 saat
+    https_only=False,  # istersen True yapabilirsin
+    max_age=60 * 60 * 24 * 7,  # 7 gün
 )
 
-# Basit auth duvarı: login/health/static harici sayfalar için oturum zorunlu
-class AuthWall(BaseHTTPMiddleware):
+# Basit güvenlik header’ları
+class HardenHeaders(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
-        path = request.url.path
+        response = await call_next(request)
+        response.headers["X-Frame-Options"] = "SAMEORIGIN"
+        response.headers["X-Content-Type-Options"] = "nosniff"
+        return response
 
-        # Serbest bırakılan yollar
-        if (
-            path.startswith("/static")
-            or path.startswith("/health")
-            or path.startswith("/login")
-            or path.startswith("/csrf")
-        ):
-            return await call_next(request)
+app.add_middleware(HardenHeaders)
 
-        user = request.session.get("user")
-        if user is None:
-            # Tarayıcı ise login'e yönlendir, API ise 401
-            accept = request.headers.get("accept", "")
-            if "text/html" in accept or path == "/":
-                next_url = request.url.path
-                if request.url.query:
-                    next_url += f"?{request.url.query}"
-                return RedirectResponse(
-                    url=f"/login?next={next_url}",
-                    status_code=status.HTTP_303_SEE_OTHER,
-                )
-            return JSONResponse({"detail": "Unauthorized"}, status_code=401)
+# Statik & Jinja
+app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
+templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
 
-        return await call_next(request)
+# Jinja ortak değişkenleri
+def common_ctx(request: Request):
+    user = request.session.get("user")
+    is_admin = bool(user and user.get("role") == "admin")
+    csrf_token = ensure_csrf(request)
+    return {"request": request, "app_name": APP_NAME, "user": user, "is_admin": is_admin, "csrf_token": csrf_token}
 
-app.add_middleware(AuthWall)
-
-# Statik & Jinja (varsa)
-if os.path.isdir(STATIC_DIR):
-    app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
-templates = Jinja2Templates(directory=TEMPLATES_DIR) if os.path.isdir(TEMPLATES_DIR) else None
-
-# ==========
+# ────────────────────────────────────────────────────────────────────────────────
 # DB
-# ==========
-def get_db() -> sqlite3.Connection:
-    # /tmp dizini mevcut; dosya yoksa sqlite oluşturur
-    conn = sqlite3.connect(USAGE_DB_PATH, timeout=30, check_same_thread=False)
-    conn.row_factory = sqlite3.Row
-    return conn
+# ────────────────────────────────────────────────────────────────────────────────
+def get_db():
+    # check_same_thread False: aynı process’te farklı thread’ler kullanabilir
+    return sqlite3.connect(USAGE_DB_PATH, timeout=30, check_same_thread=False)
 
-def ensure_db() -> None:
+def ensure_db():
     conn = get_db()
+    cur = conn.cursor()
+    # kullanıcılar
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS users (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        username TEXT UNIQUE NOT NULL,
+        pw_hash TEXT NOT NULL,
+        role TEXT NOT NULL CHECK(role IN ('admin','user')),
+        created_at INTEGER NOT NULL
+    )""")
+    # basit log (opsiyonel)
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS audit_log (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        username TEXT,
+        action TEXT,
+        at INTEGER NOT NULL
+    )""")
+    conn.commit()
+    conn.close()
+
+def hash_password(plain: str) -> str:
+    return bcrypt.hashpw(plain.encode("utf-8"), bcrypt.gensalt()).decode("utf-8")
+
+def check_password(plain: str, hashed: str) -> bool:
     try:
-        cur = conn.cursor()
-        # Kullanıcılar
-        cur.execute(
-            """
-            CREATE TABLE IF NOT EXISTS users (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                username TEXT NOT NULL UNIQUE,
-                pw_hash TEXT NOT NULL,
-                role TEXT NOT NULL DEFAULT 'user',
-                created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
-            )
-            """
-        )
-        # Basit kullanım log'u (opsiyonel)
-        cur.execute(
-            """
-            CREATE TABLE IF NOT EXISTS usage_logs (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                ts TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                username TEXT,
-                action TEXT,
-                meta TEXT
-            )
-            """
-        )
-        conn.commit()
-    finally:
-        conn.close()
-
-def log_usage(username: Optional[str], action: str, meta: str = ""):
-    try:
-        conn = get_db()
-        with conn:
-            conn.execute(
-                "INSERT INTO usage_logs (username, action, meta) VALUES (?, ?, ?)",
-                (username, f"{LOG_TAG}:{action}", meta),
-            )
-    except Exception:
-        # log hatası uygulamayı bozmasın
-        pass
-
-# ==========
-# Security helpers
-# ==========
-import bcrypt
-
-def hash_password(password: str) -> str:
-    return bcrypt.hashpw(password.encode("utf-8"), bcrypt.gensalt()).decode("utf-8")
-
-def verify_password(password: str, pw_hash: str) -> bool:
-    try:
-        return bcrypt.checkpw(password.encode("utf-8"), pw_hash.encode("utf-8"))
+        return bcrypt.checkpw(plain.encode("utf-8"), hashed.encode("utf-8"))
     except Exception:
         return False
 
-# CSRF token: oturumda sakla ve form/header ile doğrula
-def get_csrf_token(request: Request) -> str:
+def create_user_if_missing(username: str, password: str, role: str = "user"):
+    conn = get_db()
+    cur = conn.cursor()
+    # varsa dokunma
+    cur.execute("SELECT id FROM users WHERE username = ?", (username,))
+    row = cur.fetchone()
+    if row:
+        conn.close()
+        return
+    pw_hash = hash_password(password)
+    cur.execute(
+        "INSERT INTO users (username, pw_hash, role, created_at) VALUES (?,?,?,?)",
+        (username, pw_hash, role, int(time.time()))
+    )
+    conn.commit()
+    conn.close()
+
+def seed_admin_from_env():
+    # admin’i bir kere tohumla
+    create_user_if_missing(ADMIN_CODE_USER, ADMIN_CODE_PASS, "admin")
+
+def audit(username: Optional[str], action: str):
+    conn = get_db()
+    cur = conn.cursor()
+    cur.execute("INSERT INTO audit_log (username, action, at) VALUES (?,?,?)", (username, action, int(time.time())))
+    conn.commit()
+    conn.close()
+
+# ────────────────────────────────────────────────────────────────────────────────
+# CSRF
+# ────────────────────────────────────────────────────────────────────────────────
+def ensure_csrf(request: Request) -> str:
     token = request.session.get("csrf_token")
     if not token:
         token = secrets.token_urlsafe(32)
         request.session["csrf_token"] = token
     return token
 
-def require_csrf(request: Request, provided: Optional[str]) -> None:
-    expected = request.session.get("csrf_token")
-    header_token = request.headers.get("x-csrf-token")
-    token = provided or header_token
-    if not expected or not token or not secrets.compare_digest(expected, token):
-        raise HTTPException(status_code=400, detail="Invalid or missing CSRF token")
+def verify_csrf(request: Request, token_from_form: str):
+    token_in_session = request.session.get("csrf_token")
+    if not token_in_session or not token_from_form or token_from_form != token_in_session:
+        raise HTTPException(status_code=400, detail="CSRF doğrulaması başarısız")
 
-# ==========
-# Admin seeding
-# ==========
-def create_user_if_missing(username: str, password: str, role: str = "user") -> None:
-    pw_hash = hash_password(password)
-    conn = get_db()
-    try:
-        with conn:
-            # INSERT OR IGNORE: varsa patlamasın
-            conn.execute(
-                "INSERT OR IGNORE INTO users (username, pw_hash, role) VALUES (?, ?, ?)",
-                (username, pw_hash, role),
-            )
-    finally:
-        conn.close()
-
-def seed_admin_from_code():
-    create_user_if_missing(ADMIN_CODE_USER, ADMIN_CODE_PASS, "admin")
-
-# ==========
-# Startup
-# ==========
-@app.on_event("startup")
-def on_startup():
-    ensure_db()
-    seed_admin_from_code()
-    print(f"[INFO] Using DB at: {USAGE_DB_PATH}")
-
-# ==========
-# Utilities
-# ==========
-def user_in_session(request: Request) -> Optional[dict]:
+# ────────────────────────────────────────────────────────────────────────────────
+# AUTH HELPERS
+# ────────────────────────────────────────────────────────────────────────────────
+def current_user(request: Request) -> Optional[dict]:
     return request.session.get("user")
 
-def require_admin(request: Request) -> dict:
-    user = user_in_session(request)
-    if not user or user.get("role") != "admin":
-        raise HTTPException(status_code=403, detail="Admin required")
-    return user
+def require_user(request: Request) -> dict:
+    u = current_user(request)
+    if not u:
+        # login’e yönlendir
+        next_url = str(request.url)
+        r = RedirectResponse(url=f"/login?next={URL(next_url).path}", status_code=303)
+        return r  # FastAPI dependency içinde redirect return edemiyoruz; bu yüzden route içinde kullanacağız
+    return u
 
-# ==========
-# Health & HEAD (Render uyum)
-# ==========
+def is_admin_user(u: Optional[dict]) -> bool:
+    return bool(u and u.get("role") == "admin")
+
+# ────────────────────────────────────────────────────────────────────────────────
+# STARTUP
+# ────────────────────────────────────────────────────────────────────────────────
+@app.on_event("startup")
+def on_startup():
+    # /tmp yolunu bilgilendir
+    print(f"[INFO] Using DB at: {USAGE_DB_PATH}")
+    ensure_db()
+    seed_admin_from_env()
+
+# ────────────────────────────────────────────────────────────────────────────────
+# HEALTH
+# ────────────────────────────────────────────────────────────────────────────────
 @app.get("/health")
 def health():
-    ok = True
-    try:
-        conn = get_db()
-        conn.execute("SELECT 1")
-        conn.close()
-    except Exception:
-        ok = False
-    return {"ok": ok, "db": USAGE_DB_PATH, "app": APP_NAME}
+    return {"ok": True}
+
+@app.get("/healthz")
+def healthz():
+    return {"ok": True}
 
 @app.head("/")
 def head_root():
+    # Render port scan HEAD / atıyor -> 204 ver, auth kontrol etmeyelim
     return Response(status_code=204)
 
-@app.head("/login")
-def head_login():
-    return Response(status_code=204)
-
-# ==========
-# CSRF fetch endpoint (SPA/Ajax için)
-# ==========
-@app.get("/csrf")
-def csrf(request: Request):
-    return {"csrf_token": get_csrf_token(request)}
-
-# ==========
-# Auth
-# ==========
-def render_login_html(request: Request, next_url: str, error: str = "") -> HTMLResponse:
-    # Jinja varsa onu kullan
-    if templates:
-        return templates.TemplateResponse(
-            "login.html",
-            {
-                "request": request,
-                "app_name": APP_NAME,
-                "next": next_url,
-                "csrf_token": get_csrf_token(request),
-                "error": error,
-            },
-            status_code=200,
-        )
-    # Minimal yerleşik HTML (şablon yoksa)
-    csrf = get_csrf_token(request)
-    html = f"""
-    <!doctype html>
-    <html lang="tr">
-    <head>
-      <meta charset="utf-8" />
-      <meta name="viewport" content="width=device-width, initial-scale=1" />
-      <title>{APP_NAME} · Giriş</title>
-      <link rel="preconnect" href="https://fonts.googleapis.com">
-      <style>
-        body{{font-family:system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;background:#0b1220;color:#eaeef8;display:flex;align-items:center;justify-content:center;height:100vh;margin:0}}
-        .card{{background:#121a2b;border:1px solid #1f2a44;border-radius:16px;box-shadow:0 10px 30px rgba(0,0,0,.4);padding:24px;max-width:360px;width:100%}}
-        h1{{font-size:18px;margin:0 0 12px}}
-        .muted{{color:#9fb0d1;font-size:13px;margin-bottom:18px}}
-        label{{display:block;margin:10px 0 6px;font-size:13px;color:#c9d7f7}}
-        input{{width:100%;padding:10px;border-radius:10px;border:1px solid #243251;background:#0c1322;color:#eaeef8}}
-        button{{margin-top:14px;width:100%;padding:10px;border-radius:10px;border:0;background:#3b82f6;color:white;font-weight:600;cursor:pointer}}
-        .err{{color:#ff6b6b;font-size:13px;margin-top:6px;min-height:16px}}
-        .row{{display:flex;gap:8px}}
-      </style>
-    </head>
-    <body>
-      <form class="card" method="post" action="/login">
-        <h1>Giriş yap</h1>
-        <div class="muted">Admin'in verdiği kullanıcıyla devam edin.</div>
-        {"<div class='err'>" + error + "</div>" if error else "<div class='err'>&nbsp;</div>"}
-        <input type="hidden" name="csrf_token" value="{csrf}" />
-        <input type="hidden" name="next" value="{next_url}" />
-        <label>Kullanıcı adı</label>
-        <input type="text" name="username" autofocus required />
-        <label>Şifre</label>
-        <input type="password" name="password" required />
-        <button type="submit">Giriş</button>
-      </form>
-    </body>
-    </html>
-    """
-    return HTMLResponse(content=html, status_code=200)
-
+# ────────────────────────────────────────────────────────────────────────────────
+# AUTH ROUTES
+# ────────────────────────────────────────────────────────────────────────────────
 @app.get("/login", response_class=HTMLResponse)
-def login_get(request: Request, next: str = "/"):
-    return render_login_html(request, next_url=next)
+def login_form(request: Request, next: str = "/"):
+    ctx = common_ctx(request) | {"next": next, "error": None}
+    return templates.TemplateResponse("login.html", ctx)
 
-# CSRF'yi kendimiz doğruladığımız için Pydantic "Field required" hatasını engelliyoruz
-@app.post("/login")
-def login_post(
+@app.post("/login", response_class=HTMLResponse)
+def login_submit(
     request: Request,
-    username: str = Form(""),
-    password: str = Form(""),
-    csrf_token: Optional[str] = Form(None),
-    next: str = Form("/"),
+    username: str = Form(...),
+    password: str = Form(...),
+    csrf_token: str = Form(...),
+    next: str = Form("/")
 ):
-    try:
-        require_csrf(request, csrf_token)
-    except HTTPException as e:
-        # Form eksikse bile güzel hata verelim
-        return render_login_html(request, next_url=next, error="CSRF doğrulaması başarısız.")
+    verify_csrf(request, csrf_token)
 
-    # Kimlik doğrulama
     conn = get_db()
-    try:
-        cur = conn.execute("SELECT username, pw_hash, role FROM users WHERE username = ?", (username.strip(),))
-        row = cur.fetchone()
-    finally:
-        conn.close()
+    cur = conn.cursor()
+    cur.execute("SELECT username, pw_hash, role FROM users WHERE username = ?", (username,))
+    row = cur.fetchone()
+    conn.close()
 
-    if not row or not verify_password(password, row["pw_hash"]):
-        log_usage(None, "login_failed", f"user={username}")
-        return render_login_html(request, next_url=next, error="Kullanıcı adı veya şifre hatalı.")
+    if not row or not check_password(password, row[1]):
+        ctx = common_ctx(request) | {"next": next, "error": "Geçersiz kullanıcı adı veya şifre"}
+        return templates.TemplateResponse("login.html", ctx, status_code=400)
 
-    # Oturumu yaz
-    request.session["user"] = {"username": row["username"], "role": row["role"], "t": int(time.time())}
-    log_usage(row["username"], "login_ok")
+    # Login success
+    request.session["user"] = {"username": row[0], "role": row[2]}
+    audit(row[0], "login")
+    return RedirectResponse(next or "/", status_code=303)
 
-    # Güvenli yönlendirme
-    target = next if next.startswith("/") else "/"
-    return RedirectResponse(url=target, status_code=status.HTTP_303_SEE_OTHER)
-
-@app.get("/logout")
-def logout(request: Request):
+@app.post("/logout")
+def logout(request: Request, csrf_token: str = Form(...)):
+    verify_csrf(request, csrf_token)
     u = request.session.get("user")
     if u:
-        log_usage(u.get("username"), "logout")
+        audit(u.get("username"), "logout")
     request.session.clear()
-    return RedirectResponse(url="/login", status_code=status.HTTP_303_SEE_OTHER)
+    return RedirectResponse("/login", status_code=303)
 
-# ==========
-# Root (örnek sayfa)
-# ==========
-def render_index_html(request: Request) -> HTMLResponse:
-    user = user_in_session(request)
-    username = user.get("username") if user else "?"
-    role = user.get("role") if user else "user"
-    admin_link = '<a href="/admin" style="margin-right:12px">Admin</a>' if role == "admin" else ""
-    logout = '<a href="/logout">Çıkış</a>'
-    # Jinja varsa templates/index.html tercih edilecek
-    if templates:
-        return templates.TemplateResponse(
-            "index.html",
-            {
-                "request": request,
-                "app_name": APP_NAME,
-                "user": user,
-                "csrf_token": get_csrf_token(request),
-            },
-            status_code=200,
-        )
-    html = f"""
-    <!doctype html><html lang="tr"><head>
-      <meta charset="utf-8" />
-      <meta name="viewport" content="width=device-width, initial-scale=1" />
-      <title>{APP_NAME}</title>
-      <style>
-        body{{font-family:system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;background:#0b1220;color:#eaeef8;margin:0}}
-        header{{display:flex;justify-content:space-between;align-items:center;padding:16px;border-bottom:1px solid #1f2a44;background:#0f172a}}
-        main{{padding:20px}}
-        .nav a{{color:#c9d7f7;text-decoration:none;margin-right:12px}}
-        .card{{background:#121a2b;border:1px solid #1f2a44;border-radius:16px;padding:20px;max-width:900px}}
-        .muted{{color:#9fb0d1}}
-        #drop{{margin-top:16px;border:2px dashed #2d3a5f;border-radius:16px;padding:30px;text-align:center}}
-        #thumbs{{display:flex;gap:10px;flex-wrap:wrap;margin-top:12px}}
-        #thumbs img{{width:96px;height:96px;object-fit:cover;border-radius:10px;border:1px solid #22304f}}
-      </style>
-    </head><body>
-      <header>
-        <div class="nav">
-          <strong>{APP_NAME}</strong>
-        </div>
-        <div class="nav">
-          {admin_link}
-          {logout}
-        </div>
-      </header>
-      <main>
-        <div class="card">
-          <div>Merhaba, <strong>{username}</strong> <span class="muted">({role})</span></div>
-          <p class="muted">Eski arayüz hissiyle basit sürükle-bırak önizleme alanı aşağıda.</p>
-          <div id="drop">Görselleri buraya sürükleyin veya tıklayın<input id="file" type="file" multiple accept="image/*" style="display:none"/></div>
-          <div id="thumbs"></div>
-        </div>
-      </main>
-      <script>
-        const drop = document.getElementById('drop');
-        const fileInput = document.getElementById('file');
-        const thumbs = document.getElementById('thumbs');
-
-        const openPicker = () => fileInput.click();
-        drop.addEventListener('click', openPicker);
-
-        const onFiles = (files) => {{
-          thumbs.innerHTML = '';
-          [...files].forEach(f => {{
-            const url = URL.createObjectURL(f);
-            const img = document.createElement('img');
-            img.src = url;
-            thumbs.appendChild(img);
-          }});
-        }};
-
-        drop.addEventListener('dragover', e => {{ e.preventDefault(); drop.style.opacity = 0.8; }});
-        drop.addEventListener('dragleave', e => {{ drop.style.opacity = 1; }});
-        drop.addEventListener('drop', e => {{
-          e.preventDefault(); drop.style.opacity = 1;
-          onFiles(e.dataTransfer.files);
-        }});
-        fileInput.addEventListener('change', e => onFiles(e.target.files));
-      </script>
-    </body></html>
-    """
-    return HTMLResponse(html)
-
+# ────────────────────────────────────────────────────────────────────────────────
+# HOME / PLANLAMA (eski küçük önizlemeli sürükle-bırak)
+# ────────────────────────────────────────────────────────────────────────────────
 @app.get("/", response_class=HTMLResponse)
-def index(request: Request):
-    return render_index_html(request)
+def home(request: Request):
+    u = current_user(request)
+    if not u:
+        return RedirectResponse("/login?next=/", status_code=303)
+    ctx = common_ctx(request)
+    return templates.TemplateResponse("index.html", ctx)
 
-# ==========
-# Admin: kullanıcı yönetimi
-# ==========
-def render_admin_html(request: Request, users: list[sqlite3.Row], error: str = "", ok: str = "") -> HTMLResponse:
-    if templates:
-        return templates.TemplateResponse(
-            "admin.html",
-            {
-                "request": request,
-                "app_name": APP_NAME,
-                "users": users,
-                "csrf_token": get_csrf_token(request),
-                "error": error,
-                "ok": ok,
-            },
-            status_code=200,
-        )
-    rows = "".join(
-        f"<tr><td>{u['username']}</td><td>{u['role']}</td>"
-        f"<td><form method='post' action='/admin/delete-user' style='display:inline'>"
-        f"<input type='hidden' name='csrf_token' value='{get_csrf_token(request)}'/>"
-        f"<input type='hidden' name='username' value='{u['username']}'/>"
-        f"<button onclick=\"return confirm('Silinsin mi?')\">Sil</button></form></td></tr>"
-        for u in users
-    )
-    msg = f"<div style='color:#7cf08a'>{ok}</div>" if ok else ""
-    err = f"<div style='color:#ff6b6b'>{error}</div>" if error else ""
-    html = f"""
-    <!doctype html><html lang="tr"><head>
-      <meta charset="utf-8" /><meta name="viewport" content="width=device-width, initial-scale=1" />
-      <title>Admin · {APP_NAME}</title>
-      <style>
-        body{{font-family:system-ui;background:#0b1220;color:#eaeef8;margin:0}}
-        header{{display:flex;justify-content:space-between;align-items:center;padding:16px;border-bottom:1px solid #1f2a44;background:#0f172a}}
-        main{{padding:20px;max-width:960px;margin:0 auto}}
-        table{{width:100%;border-collapse:collapse}}
-        th,td{{border-bottom:1px solid #25345a;padding:8px}}
-        input,select,button{{padding:8px;border-radius:8px;border:1px solid #243251;background:#0c1322;color:#eaeef8}}
-        .row{{display:flex;gap:8px;flex-wrap:wrap;margin:10px 0}}
-        a{{color:#c9d7f7;text-decoration:none;margin-left:12px}}
-      </style>
-    </head><body>
-      <header>
-        <div><strong>Admin · {APP_NAME}</strong></div>
-        <div>
-          <a href="/">Planlama</a>
-          <a href="/logout">Çıkış</a>
-        </div>
-      </header>
-      <main>
-        {msg}{err}
-        <h2>Kullanıcılar</h2>
-        <table>
-          <thead><tr><th>Kullanıcı</th><th>Rol</th><th>İşlem</th></tr></thead>
-          <tbody>{rows}</tbody>
-        </table>
+@app.post("/upload")
+async def upload_images(
+    request: Request,
+    csrf_token: str = Form(...),
+    files: list[UploadFile] = File(default=[])
+):
+    verify_csrf(request, csrf_token)
+    u = current_user(request)
+    if not u:
+        return RedirectResponse("/login?next=/", status_code=303)
 
-        <h3>Yeni Kullanıcı</h3>
-        <form method="post" action="/admin/create-user">
-          <input type="hidden" name="csrf_token" value="{get_csrf_token(request)}" />
-          <div class="row">
-            <input name="new_username" placeholder="kullanıcı adı" required />
-            <input name="new_password" type="password" placeholder="şifre" required />
-            <select name="role">
-              <option value="user">user</option>
-              <option value="admin">admin</option>
-            </select>
-            <button type="submit">Oluştur</button>
-          </div>
-        </form>
-      </main>
-    </body></html>
-    """
-    return HTMLResponse(html)
+    saved = []
+    upload_dir = Path("/tmp/uploads")
+    upload_dir.mkdir(parents=True, exist_ok=True)
 
+    for f in files:
+        if not f.filename:
+            continue
+        # sadece temel güvenlik filtresi
+        name = f.filename.replace("/", "_").replace("\\", "_")
+        dst = upload_dir / f"{int(time.time()*1000)}_{name}"
+        content = await f.read()
+        dst.write_bytes(content)
+        saved.append(dst.name)
+
+    audit(u.get("username"), f"uploaded {len(saved)} file(s)")
+    return JSONResponse({"ok": True, "saved": saved})
+
+# ────────────────────────────────────────────────────────────────────────────────
+# ADMIN: kullanıcı yönetimi (yalnız admin)
+# ────────────────────────────────────────────────────────────────────────────────
 @app.get("/admin", response_class=HTMLResponse)
-def admin_get(request: Request, _: dict = Depends(require_admin)):
+def admin_home(request: Request):
+    u = current_user(request)
+    if not u:
+        return RedirectResponse("/login?next=/admin", status_code=303)
+    if not is_admin_user(u):
+        raise HTTPException(status_code=403, detail="Yasak")
+    # kullanıcıları listele
     conn = get_db()
-    try:
-        users = conn.execute("SELECT username, role FROM users ORDER BY username").fetchall()
-    finally:
-        conn.close()
-    return render_admin_html(request, users)
+    cur = conn.cursor()
+    cur.execute("SELECT id, username, role, created_at FROM users ORDER BY id DESC")
+    users = [{"id": r[0], "username": r[1], "role": r[2], "created_at": r[3]}] = [*map(lambda r: {"id": r[0], "username": r[1], "role": r[2], "created_at": r[3]}, cur.fetchall())]  # noqa: E731
+    conn.close()
+    ctx = common_ctx(request) | {"users": users}
+    return templates.TemplateResponse("admin.html", ctx)
 
-@app.post("/admin/create-user")
+@app.post("/admin/users/create")
 def admin_create_user(
     request: Request,
-    _: dict = Depends(require_admin),
-    new_username: str = Form(""),
-    new_password: str = Form(""),
+    username: str = Form(...),
+    password: str = Form(...),
     role: str = Form("user"),
-    csrf_token: Optional[str] = Form(None),
+    csrf_token: str = Form(...)
 ):
-    require_csrf(request, csrf_token)
-    new_username = new_username.strip()
-    if not new_username or not new_password:
-        raise HTTPException(400, "Eksik bilgi")
+    u = current_user(request)
+    if not u:
+        return RedirectResponse("/login?next=/admin", status_code=303)
+    if not is_admin_user(u):
+        raise HTTPException(status_code=403, detail="Yasak")
+    verify_csrf(request, csrf_token)
 
-    if role not in ("user", "admin"):
+    if role not in ("admin", "user"):
         role = "user"
 
     conn = get_db()
-    try:
-        with conn:
-            conn.execute(
-                "INSERT INTO users (username, pw_hash, role) VALUES (?, ?, ?)",
-                (new_username, hash_password(new_password), role),
-            )
-        log_usage(user_in_session(request)["username"], "admin_create_user", new_username)
-    except sqlite3.IntegrityError:
-        # zaten var
-        pass
-    finally:
+    cur = conn.cursor()
+    cur.execute("SELECT id FROM users WHERE username = ?", (username,))
+    if cur.fetchone():
         conn.close()
+        return RedirectResponse("/admin?err=exists", status_code=303)
 
-    return RedirectResponse(url="/admin", status_code=status.HTTP_303_SEE_OTHER)
+    pw_hash = hash_password(password)
+    cur.execute(
+        "INSERT INTO users (username, pw_hash, role, created_at) VALUES (?,?,?,?)",
+        (username, pw_hash, role, int(time.time()))
+    )
+    conn.commit()
+    conn.close()
 
-@app.post("/admin/delete-user")
+    audit(u.get("username"), f"create_user:{username}:{role}")
+    return RedirectResponse("/admin?ok=created", status_code=303)
+
+@app.post("/admin/users/delete")
 def admin_delete_user(
     request: Request,
-    _: dict = Depends(require_admin),
-    username: str = Form(""),
-    csrf_token: Optional[str] = Form(None),
+    user_id: int = Form(...),
+    csrf_token: str = Form(...)
 ):
-    require_csrf(request, csrf_token)
-    username = username.strip()
-    me = user_in_session(request)["username"]
-    if username == me:
-        return RedirectResponse(url="/admin", status_code=status.HTTP_303_SEE_OTHER)
+    u = current_user(request)
+    if not u:
+        return RedirectResponse("/login?next=/admin", status_code=303)
+    if not is_admin_user(u):
+        raise HTTPException(status_code=403, detail="Yasak")
+    verify_csrf(request, csrf_token)
 
     conn = get_db()
-    try:
-        with conn:
-            conn.execute("DELETE FROM users WHERE username = ?", (username,))
-        log_usage(me, "admin_delete_user", username)
-    finally:
+    cur = conn.cursor()
+    # admin kendini silemesin
+    cur.execute("SELECT username, role FROM users WHERE id = ?", (user_id,))
+    row = cur.fetchone()
+    if not row:
         conn.close()
+        return RedirectResponse("/admin?err=notfound", status_code=303)
+    target_username, target_role = row
+    if target_username == u.get("username"):
+        conn.close()
+        return RedirectResponse("/admin?err=cant_delete_self", status_code=303)
 
-    return RedirectResponse(url="/admin", status_code=status.HTTP_303_SEE_OTHER)
+    cur.execute("DELETE FROM users WHERE id = ?", (user_id,))
+    conn.commit()
+    conn.close()
+
+    audit(u.get("username"), f"delete_user:{target_username}")
+    return RedirectResponse("/admin?ok=deleted", status_code=303)
