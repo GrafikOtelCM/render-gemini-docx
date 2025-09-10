@@ -1,17 +1,17 @@
 {% extends "base.html" %}
 {% block content %}
-<div class="card auth">
-  <h1>Giriş Yap</h1>
-  {% if error %}<div class="alert">{{ error }}</div>{% endif %}
-  <form method="post" action="/login">
-    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-    <input type="hidden" name="next" value="{{ next or '/' }}">
-    <label>Kullanıcı adı</label>
-    <input name="username" placeholder="kullanici" required />
-    <label>Şifre</label>
-    <input name="password" type="password" placeholder="••••••••" required />
-    <button type="submit">Giriş</button>
+<div class="card">
+  <h1>Giriş</h1>
+  {% if error %}
+    <div class="alert">{{ error }}</div>
+  {% endif %}
+  <form method="post" action="/login" class="form">
+    <input type="hidden" name="next" value="{{ next or '/dashboard' }}">
+    <label>Kullanıcı Adı</label>
+    <input name="username" placeholder="kullanıcı adı" required>
+    <label>Parola</label>
+    <input name="password" type="password" placeholder="parola" required>
+    <button type="submit" class="btn primary">Giriş Yap</button>
   </form>
-  <p class="muted">Admin varsayılanı: <code>admin / Admin!123</code> (koddan değiştir)</p>
 </div>
 {% endblock %}
