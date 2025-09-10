@@ -1,57 +1,21 @@
 {% extends "base.html" %}
 {% block content %}
-<h2>Plan Oluştur</h2>
+<h2>Planlama Oluştur</h2>
 
-<form id="plan-form" method="post" action="/plan" enctype="multipart/form-data" class="grid gap">
-  <input type="hidden" name="csrf_token" value="{{ get_csrf_token(request) }}">
+<div id="dropzone" class="dropzone">
+  <p>Görselleri buraya sürükleyin ya da tıklayıp seçin</p>
+  <input id="file-input" type="file" accept="image/*" multiple hidden />
+</div>
 
-  <div class="grid cols-3 gap">
-    <label>
-      <span>Otel Adı</span>
-      <input name="hotel_name" placeholder="Örn: Martı Prime" required>
-    </label>
+<div id="thumbs" class="thumbs"></div>
 
-    <label>
-      <span>Plan Ayı</span>
-      <input type="month" name="plan_month" required>
-    </label>
-
-    <label>
-      <span>Kaç Günde Bir?</span>
-      <select name="interval_days" required>
-        <option value="2">2</option>
-        <option value="3" selected>3</option>
-        <option value="4">4</option>
-        <option value="7">7</option>
-      </select>
-    </label>
-  </div>
-
-  <label>
-    <span>İletişim Tonu</span>
-    <select name="tone">
-      <option value="Bilgilendirici">Bilgilendirici</option>
-      <option value="Satış Odaklı">Satış Odaklı</option>
-      <option value="Lüks & Premium">Lüks & Premium</option>
-      <option value="Sıcacık & Samimi" selected>Sıcacık & Samimi</option>
-    </select>
-  </label>
-
-  <div class="uploader">
-    <div id="dropzone" class="dropzone">
-      <div>
-        <strong>Görselleri sürükleyip bırak</strong> veya
-        <label class="link">
-          dosya seç
-          <input id="file-input" type="file" name="images" accept="image/*" multiple hidden>
-        </label>
-      </div>
-      <div class="hint">En fazla ~10 görsel önerilir</div>
-    </div>
-    <div id="preview" class="preview-grid"></div>
-    <div class="muted" id="file-count">Seçili dosya: 0</div>
-  </div>
-
-  <button id="submit-btn" class="btn primary">Oluştur & İndir</button>
+<form id="upload-form" class="stack mtop">
+  <input type="hidden" name="csrf_token" value="{{ csrf_token }}" />
+  <button id="btn-upload" class="btn-primary" type="submit">Yükle</button>
 </form>
+
+<script src="/static/app.js"></script>
+<script>
+  window.CSRF_TOKEN = "{{ csrf_token }}";
+</script>
 {% endblock %}
