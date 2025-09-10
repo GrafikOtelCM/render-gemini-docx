@@ -2,36 +2,33 @@
 <html lang="tr">
 <head>
   <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <meta name="csrf-token" content="{{ get_csrf_token(request) }}">
-  <title>{{ APP_NAME }}</title>
-  <link rel="stylesheet" href="/static/styles.css">
-  <script defer src="/static/app.js"></script>
+  <title>{{ app_name }}</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <link href="/static/styles.css" rel="stylesheet" />
 </head>
 <body>
-  <header class="topbar">
-    <div class="brand">{{ APP_NAME }}</div>
-    <nav class="nav">
-      {% if request.session.get('user') %}
-        <a class="btn btn-ghost" href="/">Planlama</a>
-        {% if request.session['user']['role'] == 'admin' %}
-          <a class="btn btn-ghost" href="/admin/dashboard">Admin</a>
+  <nav class="nav">
+    <div class="nav-left">
+      <a class="brand" href="/">🏨 {{ app_name }}</a>
+    </div>
+    <div class="nav-right">
+      {% if user %}
+        <a href="/" class="nav-link">Planlama</a>
+        {% if is_admin %}
+          <a href="/admin" class="nav-link">Admin</a>
         {% endif %}
-        <span class="badge">{{ request.session['user']['username'] }} • {{ request.session['user']['role'] }}</span>
-        <form method="post" action="/logout" class="inline">
-          <input type="hidden" name="csrf_token" value="{{ get_csrf_token(request) }}">
-          <button class="btn">Çıkış</button>
+        <form class="inline" method="post" action="/logout">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token }}" />
+          <button class="btn-secondary" type="submit">Çıkış ({{ user.username }})</button>
         </form>
       {% else %}
-        <a class="btn primary" href="/login">Giriş</a>
+        <a href="/login" class="nav-link">Giriş</a>
       {% endif %}
-    </nav>
-  </header>
+    </div>
+  </nav>
+
   <main class="container">
     {% block content %}{% endblock %}
   </main>
-  <footer class="footer">
-    <small>© {{ APP_NAME }}</small>
-  </footer>
 </body>
 </html>
