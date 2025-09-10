@@ -1,23 +1,22 @@
-{% extends "base.html" %}
+{% extends "layout.html" %}
 {% block content %}
-<div class="card centered w-400">
+<div class="card narrow">
   <h2>Giriş Yap</h2>
   {% if error %}
-    <div class="alert">{{ error }}</div>
+    <div class="alert alert-error">{{ error }}</div>
   {% endif %}
-  <form method="post" action="/login" class="stack">
-    <input type="hidden" name="csrf_token" value="{{ csrf_token }}" />
-    <input type="hidden" name="next" value="{{ next }}" />
+  <form method="post" action="/login">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <input type="hidden" name="next" value="{{ next or '/' }}">
     <label>
-      <span>Kullanıcı Adı</span>
-      <input name="username" required />
+      Kullanıcı Adı
+      <input name="username" required>
     </label>
     <label>
-      <span>Şifre</span>
-      <input name="password" type="password" required />
+      Şifre
+      <input name="password" type="password" required>
     </label>
-    <button class="btn-primary" type="submit">Giriş</button>
+    <button class="btn" type="submit">Giriş</button>
   </form>
-  <p class="muted">Admin ilk giriş için ENV ile tohumlanır.</p>
 </div>
 {% endblock %}
