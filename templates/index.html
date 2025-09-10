@@ -1,76 +1,57 @@
 {% extends "base.html" %}
 {% block content %}
-<div class="grid-2">
-  <section class="card">
-    <div class="card-header">Plan Oluştur</div>
-    <div class="card-body">
-      <form id="planForm" method="POST" action="/plan" enctype="multipart/form-data">
-        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-        <div class="form-group">
-          <label for="hotel_name">Otel Adı</label>
-          <input id="hotel_name" name="hotel_name" type="text" required placeholder="Örn: Martı Prime">
-        </div>
+<h2>Plan Oluştur</h2>
 
-        <div class="form-group">
-          <label for="plan_month">Planlama Ayı</label>
-          <input id="plan_month" name="plan_month" type="month" required>
-        </div>
+<form id="plan-form" method="post" action="/plan" enctype="multipart/form-data" class="grid gap">
+  <input type="hidden" name="csrf_token" value="{{ get_csrf_token(request) }}">
 
-        <div class="form-group">
-          <label for="interval_days">Kaç günde bir paylaşım?</label>
-          <select id="interval_days" name="interval_days" required>
-            <option value="1">Her gün</option>
-            <option value="2">2 günde bir</option>
-            <option value="3">3 günde bir</option>
-            <option value="4">4 günde bir</option>
-            <option value="5">5 günde bir</option>
-            <option value="7">Haftada bir</option>
-          </select>
-        </div>
+  <div class="grid cols-3 gap">
+    <label>
+      <span>Otel Adı</span>
+      <input name="hotel_name" placeholder="Örn: Martı Prime" required>
+    </label>
 
-        <div class="form-group">
-          <label for="images">Görseller (en fazla 10 önerilir)</label>
-          <input id="images" name="images" type="file" accept="image/*" multiple required />
-          <small id="fileCount">Seçili dosya: 0</small>
-        </div>
+    <label>
+      <span>Plan Ayı</span>
+      <input type="month" name="plan_month" required>
+    </label>
 
-        <div class="form-group">
-          <label for="tone">Açıklama Tonu</label>
-          <select id="tone" name="tone">
-            <option>Kurumsal</option>
-            <option>Samimi</option>
-            <option>Dinamik</option>
-          </select>
-        </div>
+    <label>
+      <span>Kaç Günde Bir?</span>
+      <select name="interval_days" required>
+        <option value="2">2</option>
+        <option value="3" selected>3</option>
+        <option value="4">4</option>
+        <option value="7">7</option>
+      </select>
+    </label>
+  </div>
 
-        <button type="submit" class="btn btn-primary">Oluştur &amp; İndir</button>
-      </form>
-    </div>
-  </section>
+  <label>
+    <span>İletişim Tonu</span>
+    <select name="tone">
+      <option value="Bilgilendirici">Bilgilendirici</option>
+      <option value="Satış Odaklı">Satış Odaklı</option>
+      <option value="Lüks & Premium">Lüks & Premium</option>
+      <option value="Sıcacık & Samimi" selected>Sıcacık & Samimi</option>
+    </select>
+  </label>
 
-  <section class="card">
-    <div class="card-header">Kullanım &amp; Limit</div>
-    <div class="card-body">
-      <div class="stat-row">
-        <div>Bu Ay Oluşturulan DOCX</div>
-        <strong>{{ stats.month_docs or 0 }}</strong>
+  <div class="uploader">
+    <div id="dropzone" class="dropzone">
+      <div>
+        <strong>Görselleri sürükleyip bırak</strong> veya
+        <label class="link">
+          dosya seç
+          <input id="file-input" type="file" name="images" accept="image/*" multiple hidden>
+        </label>
       </div>
-      <div class="stat-row">
-        <div>Tahmini Maliyet (₺)</div>
-        <strong>{{ stats.estimate_try or '—' }}</strong>
-      </div>
-      <div class="muted">* Maliyet tahmini ENV oranlarına göre hesaplanır.</div>
+      <div class="hint">En fazla ~10 görsel önerilir</div>
     </div>
-  </section>
-</div>
+    <div id="preview" class="preview-grid"></div>
+    <div class="muted" id="file-count">Seçili dosya: 0</div>
+  </div>
 
-<script>
-  const images = document.getElementById('images');
-  const fileCount = document.getElementById('fileCount');
-  if (images && fileCount) {
-    images.addEventListener('change', () => {
-      fileCount.textContent = `Seçili dosya: ${images.files.length}`;
-    });
-  }
-</script>
+  <button id="submit-btn" class="btn primary">Oluştur & İndir</button>
+</form>
 {% endblock %}
