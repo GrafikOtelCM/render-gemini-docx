@@ -3,40 +3,27 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>{{ title or "Otel Planlama Stüdyosu" }}</title>
-  <link rel="stylesheet" href="/static/styles.css" />
-  <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🏨</text></svg>">
+  <title>{{ app_name }}</title>
+  <link rel="stylesheet" href="/static/style.css">
 </head>
 <body>
-  <header class="nav">
-    <div class="nav-left">
-      <a class="brand" href="/">🏨 {{ title or "Otel Planlama Stüdyosu" }}</a>
+  <header class="topbar">
+    <div class="brand">{{ app_name }}</div>
+    <nav class="nav">
       {% if user %}
-        <a class="nav-link {% if request.url.path == '/' %}active{% endif %}" href="/">Planlama</a>
+        <a href="/">Plan Oluştur</a>
         {% if user.role == 'admin' %}
-          <a class="nav-link {% if request.url.path.startswith('/admin') %}active{% endif %}" href="/admin">Admin</a>
+          <a href="/admin">Admin</a>
         {% endif %}
-      {% endif %}
-    </div>
-    <div class="nav-right">
-      {% if user %}
-        <span class="user-chip">👤 {{ user.username }}{% if user.role=='admin' %}<span class="role">admin</span>{% endif %}</span>
-        <form method="post" action="/logout">
-          <input type="hidden" name="csrf_token" value="{{ csrf_token }}" />
-          <button class="btn btn-ghost" type="submit" aria-label="Çıkış">Çıkış</button>
-        </form>
+        <span class="user">👤 {{ user.username }}</span>
+        <a class="logout" href="/logout">Çıkış</a>
       {% else %}
-        <a class="btn btn-ghost" href="/login">Giriş</a>
+        <a href="/login">Giriş</a>
       {% endif %}
-    </div>
+    </nav>
   </header>
-
-  <main class="page">
+  <main class="container">
     {% block content %}{% endblock %}
   </main>
-
-  <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
-
-  <script src="/static/app.js" defer></script>
 </body>
 </html>
