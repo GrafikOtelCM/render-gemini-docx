@@ -1,5 +1,6 @@
 import io, os, re, json, base64, datetime, sqlite3, csv, traceback, calendar, hashlib, asyncio, secrets, time
 from typing import List, Tuple, Optional
+from pathlib import Path
 
 import httpx
 from fastapi import FastAPI, Request, UploadFile
@@ -24,6 +25,11 @@ try:
 except Exception:
     TZ = None
 
+# ====== Yol ayarları ======
+BASE_DIR = Path(__file__).resolve().parent
+TEMPLATES_DIR = BASE_DIR / "templates"
+STATIC_DIR = BASE_DIR / "static"
+
 # ========= Uygulama Ayarları =========
 APP_NAME = "Plan Otomasyon – Gemini to DOCX"
 MAX_IMAGES = 10
@@ -31,7 +37,7 @@ MAX_EDGE = 1280
 IMG_JPEG_QUALITY = 80
 
 DEFAULT_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "AIzaSyDdUV3SuQ1bbhqILvR_70wGRSMdDGkOoNI")
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "YOUR_API_KEY_HERE")
 SECRET_KEY = os.getenv("SECRET_KEY", "CHANGE_THIS_SECRET")
 
 # Ücretler (USD / 1M token) - interaktif
@@ -78,19 +84,174 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
         return resp
 app.add_middleware(SecurityHeadersMiddleware)
 
-if os.path.isdir("static"):
-    app.mount("/static", StaticFiles(directory="static"), name="static")
-templates = Jinja2Templates(directory="templates")
+# Statik/Template mount
+if STATIC_DIR.is_dir():
+    app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
+templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
+
+# (İsteğe bağlı) İlk deploy’da yoksa basit şablonları oluştur
+def ensure_default_templates():
+    TEMPLATES_DIR.mkdir(parents=True, exist_ok=True)
+    (STATIC_DIR).mkdir(parents=True, exist_ok=True)
+
+    login_html = TEMPLATES_DIR / "login.html"
+    index_html = TEMPLATES_DIR / "index.html"
+    dashboard_html = TEMPLATES_DIR / "dashboard.html"
+
+    if not login_html.exists():
+        login_html.write_text("""<!doctype html>
+<html lang="tr">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<link rel="stylesheet" href="/static/styles.css">
+<title>Giriş</title>
+</head>
+<body class="container">
+  <div class="card">
+    <h1>Giriş</h1>
+    {% if error %}<div class="alert">{{ error }}</div>{% endif %}
+    <form method="post" action="/login">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <input type="hidden" name="next" value="{{ next }}">
+      <label>Kullanıcı Adı</label>
+      <input name="username" required>
+      <label>Parola</label>
+      <input name="password" type="password" required>
+      <button type="submit" class="btn">Giriş Yap</button>
+    </form>
+  </div>
+</body>
+</html>""", encoding="utf-8")
+
+    if not index_html.exists():
+        index_html.write_text("""<!doctype html>
+<html lang="tr">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<link rel="stylesheet" href="/static/styles.css">
+<title>Plan Oluştur</title>
+</head>
+<body class="container">
+  <header class="topbar">
+    <div class="brand">{{ app_name }}</div>
+    <nav><a href="/dashboard">Dashboard</a> • <a href="/logout">Çıkış</a></nav>
+  </header>
+
+  <div class="card">
+    <h1>DOCX Plan Oluştur</h1>
+    <form id="genForm" method="post" action="/generate" enctype="multipart/form-data">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+
+      <div class="grid">
+        <div>
+          <label>Doküman Adı</label>
+          <input name="doc_name" value="{{ suggested_name }}" required>
+        </div>
+        <div>
+          <label>Proje/Otel Etiketi</label>
+          <input name="project_tag" placeholder="Martı Prime, vb.">
+        </div>
+      </div>
+
+      <div class="grid">
+        <div>
+          <label>Plan Ayı</label>
+          <input type="month" name="plan_month" value="{{ default_month }}" required>
+        </div>
+        <div>
+          <label>Kaç günde bir paylaşım?</label>
+          <input type="number" name="interval_days" min="1" value="1" required>
+        </div>
+      </div>
+
+      <label>İletişim Bilgisi (caption altına eklenecek)</label>
+      <textarea name="contact_info" rows="3" placeholder="Tel, web, konum..."></textarea>
+
+      <label>Görseller (en fazla 10)</label>
+      <input type="file" name="files" accept="image/*" multiple required>
+      <p class="hint">Seçtiğiniz sırayla tarihlere yerleştirilecektir (1–29 arası).</p>
+
+      <button class="btn primary" type="submit">Oluştur & İndir</button>
+    </form>
+  </div>
+</body>
+</html>""", encoding="utf-8")
+
+    if not dashboard_html.exists():
+        dashboard_html.write_text("""<!doctype html>
+<html lang="tr">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<link rel="stylesheet" href="/static/styles.css">
+<title>Dashboard</title>
+</head>
+<body class="container">
+  <header class="topbar">
+    <div class="brand">Dashboard</div>
+    <nav><a href="/">Plan Oluştur</a> • <a href="/logout">Çıkış</a></nav>
+  </header>
+
+  <div class="card">
+    <h2>Özet (Bu Ay)</h2>
+    <div class="stats">
+      <div class="stat"><div class="k">{{ summary.runs }}</div><div class="l">Çalıştırma</div></div>
+      <div class="stat"><div class="k">{{ summary.images }}</div><div class="l">Görsel</div></div>
+      <div class="stat"><div class="k">{{ summary.in_tokens }}</div><div class="l">Girdi Token</div></div>
+      <div class="stat"><div class="k">{{ summary.out_tokens }}</div><div class="l">Çıktı Token</div></div>
+      <div class="stat"><div class="k">${{ '%.4f'|format(summary.usd) }}</div><div class="l">USD</div></div>
+      <div class="stat"><div class="k">{{ '%.2f'|format(summary.try) }} ₺</div><div class="l">TRY</div></div>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>Son 50 İşlem</h2>
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr><th>Tarih</th><th>Doküman</th><th>Proje</th><th>Ay</th><th>Görsel</th><th>InTok</th><th>OutTok</th><th>USD</th><th>TRY</th></tr>
+        </thead>
+        <tbody>
+          {% for r in rows %}
+          <tr>
+            <td>{{ r[0] }}</td>
+            <td>{{ r[1] }}</td>
+            <td>{{ r[2] or '-' }}</td>
+            <td>{{ r[3] or '-' }}</td>
+            <td>{{ r[4] }}</td>
+            <td>{{ r[5] }}</td>
+            <td>{{ r[6] }}</td>
+            <td>${{ '%.4f'|format(r[7]) }}</td>
+            <td>{{ '%.2f'|format(r[8]) }} ₺</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  {% if user.role == 'admin' %}
+  <div class="card">
+    <h2>Log Temizleme (Yalnızca Admin)</h2>
+    <form method="post" action="/admin/clear_logs">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <label>Şu kadar günden eski kayıtları sil:</label>
+      <input type="number" name="older_than_days" min="1" placeholder="örn. 30">
+      <button class="btn danger" type="submit">Temizle</button>
+    </form>
+  </div>
+  {% endif %}
+</body>
+</html>""", encoding="utf-8")
 
 # ========= DB Yardımcıları =========
 def get_db():
-    # timeout=30: kilitliyse 30 sn'ye kadar bekle; busy_timeout da 5 sn beklesin
+    # timeout=30: kilitliyse 30 sn bekle; busy_timeout ayrıca 5 sn bekler
     conn = sqlite3.connect(DB_PATH, check_same_thread=False, isolation_level=None, timeout=30)
     conn.execute("PRAGMA busy_timeout=5000;")
     return conn
 
 def ensure_db():
-    # Kilitlenme durumlarına dayanıklı başlangıç: 10 deneme
+    # Kilitlenmelere dayanıklı başlangıç: 10 deneme
     for attempt in range(10):
         try:
             conn = get_db()
@@ -98,7 +259,7 @@ def ensure_db():
             try:
                 cur.execute("PRAGMA journal_mode=WAL;")
             except sqlite3.OperationalError:
-                pass  # locked ise sonraki denemede oturur
+                pass  # locked ise sonraki denemede deneriz
 
             cur.execute("""
             CREATE TABLE IF NOT EXISTS users (
@@ -433,6 +594,7 @@ def require_admin(request: Request) -> Optional[RedirectResponse]:
 # ========= Startup =========
 @app.on_event("startup")
 def _startup():
+    ensure_default_templates()  # varsayılan şablonları yaz (yoksa)
     ensure_db()
     create_user_if_missing(os.getenv("ADMIN_USER"),  os.getenv("ADMIN_PASS"),  "admin")
     create_user_if_missing(os.getenv("STAFF1_USER"), os.getenv("STAFF1_PASS"), "staff")
