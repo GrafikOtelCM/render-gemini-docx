@@ -1,21 +1,47 @@
-{% extends "base.html" %}
+{% extends "layout.html" %}
 {% block content %}
 <h2>Planlama Oluştur</h2>
 
-<div id="dropzone" class="dropzone">
-  <p>Görselleri buraya sürükleyin ya da tıklayıp seçin</p>
-  <input id="file-input" type="file" accept="image/*" multiple hidden />
-</div>
+<form id="plan-form" method="post" action="/planla" enctype="multipart/form-data" class="card">
+  <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
 
-<div id="thumbs" class="thumbs"></div>
+  <div class="grid">
+    <label>
+      Dosya adı
+      <input name="file_name" placeholder="otel_plani.docx" value="otel_plani.docx">
+    </label>
 
-<form id="upload-form" class="stack mtop">
-  <input type="hidden" name="csrf_token" value="{{ csrf_token }}" />
-  <button id="btn-upload" class="btn-primary" type="submit">Yükle</button>
+    <label>
+      Ay seçin
+      <select name="month" required>
+        <option value="">Seçin…</option>
+        {% for val, label in months %}
+          <option value="{{ val }}">{{ label }}</option>
+        {% endfor %}
+      </select>
+    </label>
+
+    <label>
+      Kaç günde bir?
+      <input type="number" name="every_days" min="1" step="1" value="1" required>
+    </label>
+
+    <label>
+      Otel iletişim bilgisi
+      <input name="hotel_contact" placeholder="Örn. +90..., info@..., Adres...">
+    </label>
+  </div>
+
+  <div class="uploader">
+    <label for="images">Görseller (sürükle-bırak veya tıklayın)</label>
+    <input id="images" name="images" type="file" accept="image/*" multiple>
+    <div id="thumbs" class="thumbs"></div>
+  </div>
+
+  <div class="actions">
+    <button class="btn" type="submit">Planı Oluştur</button>
+  </div>
 </form>
 
-<script src="/static/app.js"></script>
-<script>
-  window.CSRF_TOKEN = "{{ csrf_token }}";
-</script>
+<div id="result" class="card" style="display:none"></div>
 {% endblock %}
