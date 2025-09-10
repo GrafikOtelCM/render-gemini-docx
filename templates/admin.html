@@ -1,58 +1,57 @@
 {% extends "base.html" %}
 {% block content %}
-<div class="grid-2">
-  <div class="card">
-    <h2>Kullanıcı Oluştur</h2>
-    {% if request.query_params.get('err') == 'exists' %}
-      <div class="alert error">Bu kullanıcı adı zaten var.</div>
-    {% elif request.query_params.get('err') == 'csrf' %}
-      <div class="alert error">CSRF doğrulaması başarısız.</div>
-    {% elif request.query_params.get('ok') %}
-      <div class="alert ok">İşlem başarılı.</div>
-    {% elif request.query_params.get('err') == 'cannot_delete_admin' %}
-      <div class="alert error">Kurucu admin silinemez.</div>
-    {% endif %}
-
-    <form method="post" action="/admin/users/create" class="form">
-      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-      <label>Kullanıcı Adı
-        <input name="username" required>
+<section class="stack gap-6">
+  <div class="card card-padded">
+    <h2 class="h2 mb-2">Kullanıcı Oluştur</h2>
+    <form id="user-form" class="grid-3 gap-3">
+      <label class="field">
+        <span class="label">Kullanıcı Adı</span>
+        <input name="username" type="text" required />
       </label>
-      <label>Şifre
-        <input name="password" type="password" required>
+      <label class="field">
+        <span class="label">Şifre</span>
+        <input name="password" type="password" required />
       </label>
-      <label>Rol
-        <select name="role">
-          <option value="user">user</option>
+      <label class="field">
+        <span class="label">Rol</span>
+        <select name="role" required>
+          <option value="user" selected>user</option>
           <option value="admin">admin</option>
         </select>
       </label>
-      <button class="btn primary" type="submit">Oluştur</button>
+      <div class="col-span-3">
+        <button class="btn btn-primary" type="submit">Ekle</button>
+      </div>
     </form>
   </div>
 
-  <div class="card">
-    <h2>Kullanıcılar</h2>
-    <div class="table">
-      <div class="thead">
-        <div>ID</div><div>Kullanıcı</div><div>Rol</div><div>Oluşturma</div><div>İşlem</div>
-      </div>
-      {% for u in users %}
-      <div class="trow">
-        <div>{{ u.id }}</div>
-        <div>{{ u.username }}</div>
-        <div>{{ u.role }}</div>
-        <div>{{ u.created_at }}</div>
-        <div>
-          <form method="post" action="/admin/users/delete" onsubmit="return confirm('Silinsin mi?')">
-            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-            <input type="hidden" name="user_id" value="{{ u.id }}">
-            <button class="btn danger" type="submit">Sil</button>
-          </form>
-        </div>
-      </div>
-      {% endfor %}
+  <div class="card card-padded">
+    <div class="flex-between mb-2">
+      <h2 class="h2">Kullanıcılar</h2>
+      <button id="refresh-users" class="btn btn-ghost small">Yenile</button>
+    </div>
+    <div class="table-wrap">
+      <table class="table">
+        <thead>
+          <tr>
+            <th>ID</th><th>Kullanıcı</th><th>Rol</th><th>Oluşturulma</th><th></th>
+          </tr>
+        </thead>
+        <tbody id="user-rows">
+          <tr><td colspan="5" class="muted">Yükleniyor…</td></tr>
+        </tbody>
+      </table>
     </div>
   </div>
-</div>
+</section>
+{% endblock %}
+
+{% block scripts %}
+<script>
+  window.__ADMIN_ENDPOINTS__ = {
+    list: "/admin/users",
+    create: "/admin/users",
+    remove: (id) => `/admin/users/${id}`
+  };
+</script>
 {% endblock %}
