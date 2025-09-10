@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Optional
 
 from fastapi import (
-    FastAPI, Request, Form, Depends, UploadFile, File, HTTPException
+    FastAPI, Request, Form, UploadFile, File, HTTPException
 )
 from fastapi.responses import HTMLResponse, RedirectResponse, Response, JSONResponse
 from fastapi.staticfiles import StaticFiles
@@ -33,7 +33,6 @@ BASE_DIR = Path(__file__).parent
 TEMPLATES_DIR = BASE_DIR / "templates"
 STATIC_DIR = BASE_DIR / "static"
 
-# Klasörler mevcut mu?
 TEMPLATES_DIR.mkdir(exist_ok=True)
 STATIC_DIR.mkdir(exist_ok=True)
 
@@ -42,13 +41,13 @@ STATIC_DIR.mkdir(exist_ok=True)
 # ────────────────────────────────────────────────────────────────────────────────
 app = FastAPI(title=APP_NAME)
 
-# Session cookie (mutlaka ilk eklensin)
+# Session cookie
 app.add_middleware(
     SessionMiddleware,
     secret_key=SECRET_KEY,
     session_cookie="ops_session",
     same_site="lax",
-    https_only=False,  # istersen True yapabilirsin
+    https_only=False,
     max_age=60 * 60 * 24 * 7,  # 7 gün
 )
 
@@ -66,24 +65,27 @@ app.add_middleware(HardenHeaders)
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
 
-# Jinja ortak değişkenleri
 def common_ctx(request: Request):
     user = request.session.get("user")
     is_admin = bool(user and user.get("role") == "admin")
     csrf_token = ensure_csrf(request)
-    return {"request": request, "app_name": APP_NAME, "user": user, "is_admin": is_admin, "csrf_token": csrf_token}
+    return {
+        "request": request,
+        "app_name": APP_NAME,
+        "user": user,
+        "is_admin": is_admin,
+        "csrf_token": csrf_token,
+    }
 
 # ────────────────────────────────────────────────────────────────────────────────
 # DB
 # ────────────────────────────────────────────────────────────────────────────────
 def get_db():
-    # check_same_thread False: aynı process’te farklı thread’ler kullanabilir
     return sqlite3.connect(USAGE_DB_PATH, timeout=30, check_same_thread=False)
 
 def ensure_db():
     conn = get_db()
     cur = conn.cursor()
-    # kullanıcılar
     cur.execute("""
     CREATE TABLE IF NOT EXISTS users (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -92,7 +94,6 @@ def ensure_db():
         role TEXT NOT NULL CHECK(role IN ('admin','user')),
         created_at INTEGER NOT NULL
     )""")
-    # basit log (opsiyonel)
     cur.execute("""
     CREATE TABLE IF NOT EXISTS audit_log (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -115,7 +116,6 @@ def check_password(plain: str, hashed: str) -> bool:
 def create_user_if_missing(username: str, password: str, role: str = "user"):
     conn = get_db()
     cur = conn.cursor()
-    # varsa dokunma
     cur.execute("SELECT id FROM users WHERE username = ?", (username,))
     row = cur.fetchone()
     if row:
@@ -130,13 +130,15 @@ def create_user_if_missing(username: str, password: str, role: str = "user"):
     conn.close()
 
 def seed_admin_from_env():
-    # admin’i bir kere tohumla
     create_user_if_missing(ADMIN_CODE_USER, ADMIN_CODE_PASS, "admin")
 
 def audit(username: Optional[str], action: str):
     conn = get_db()
     cur = conn.cursor()
-    cur.execute("INSERT INTO audit_log (username, action, at) VALUES (?,?,?)", (username, action, int(time.time())))
+    cur.execute(
+        "INSERT INTO audit_log (username, action, at) VALUES (?,?,?)",
+        (username, action, int(time.time()))
+    )
     conn.commit()
     conn.close()
 
@@ -161,15 +163,6 @@ def verify_csrf(request: Request, token_from_form: str):
 def current_user(request: Request) -> Optional[dict]:
     return request.session.get("user")
 
-def require_user(request: Request) -> dict:
-    u = current_user(request)
-    if not u:
-        # login’e yönlendir
-        next_url = str(request.url)
-        r = RedirectResponse(url=f"/login?next={URL(next_url).path}", status_code=303)
-        return r  # FastAPI dependency içinde redirect return edemiyoruz; bu yüzden route içinde kullanacağız
-    return u
-
 def is_admin_user(u: Optional[dict]) -> bool:
     return bool(u and u.get("role") == "admin")
 
@@ -178,7 +171,6 @@ def is_admin_user(u: Optional[dict]) -> bool:
 # ────────────────────────────────────────────────────────────────────────────────
 @app.on_event("startup")
 def on_startup():
-    # /tmp yolunu bilgilendir
     print(f"[INFO] Using DB at: {USAGE_DB_PATH}")
     ensure_db()
     seed_admin_from_env()
@@ -196,7 +188,6 @@ def healthz():
 
 @app.head("/")
 def head_root():
-    # Render port scan HEAD / atıyor -> 204 ver, auth kontrol etmeyelim
     return Response(status_code=204)
 
 # ────────────────────────────────────────────────────────────────────────────────
@@ -227,7 +218,6 @@ def login_submit(
         ctx = common_ctx(request) | {"next": next, "error": "Geçersiz kullanıcı adı veya şifre"}
         return templates.TemplateResponse("login.html", ctx, status_code=400)
 
-    # Login success
     request.session["user"] = {"username": row[0], "role": row[2]}
     audit(row[0], "login")
     return RedirectResponse(next or "/", status_code=303)
@@ -242,7 +232,7 @@ def logout(request: Request, csrf_token: str = Form(...)):
     return RedirectResponse("/login", status_code=303)
 
 # ────────────────────────────────────────────────────────────────────────────────
-# HOME / PLANLAMA (eski küçük önizlemeli sürükle-bırak)
+# HOME / PLANLAMA
 # ────────────────────────────────────────────────────────────────────────────────
 @app.get("/", response_class=HTMLResponse)
 def home(request: Request):
@@ -270,7 +260,6 @@ async def upload_images(
     for f in files:
         if not f.filename:
             continue
-        # sadece temel güvenlik filtresi
         name = f.filename.replace("/", "_").replace("\\", "_")
         dst = upload_dir / f"{int(time.time()*1000)}_{name}"
         content = await f.read()
@@ -290,12 +279,17 @@ def admin_home(request: Request):
         return RedirectResponse("/login?next=/admin", status_code=303)
     if not is_admin_user(u):
         raise HTTPException(status_code=403, detail="Yasak")
-    # kullanıcıları listele
+
     conn = get_db()
     cur = conn.cursor()
     cur.execute("SELECT id, username, role, created_at FROM users ORDER BY id DESC")
-    users = [{"id": r[0], "username": r[1], "role": r[2], "created_at": r[3]}] = [*map(lambda r: {"id": r[0], "username": r[1], "role": r[2], "created_at": r[3]}, cur.fetchall())]  # noqa: E731
+    rows = cur.fetchall()
+    users = [
+        {"id": r[0], "username": r[1], "role": r[2], "created_at": r[3]}
+        for r in rows
+    ]
     conn.close()
+
     ctx = common_ctx(request) | {"users": users}
     return templates.TemplateResponse("admin.html", ctx)
 
@@ -350,13 +344,12 @@ def admin_delete_user(
 
     conn = get_db()
     cur = conn.cursor()
-    # admin kendini silemesin
     cur.execute("SELECT username, role FROM users WHERE id = ?", (user_id,))
     row = cur.fetchone()
     if not row:
         conn.close()
         return RedirectResponse("/admin?err=notfound", status_code=303)
-    target_username, target_role = row
+    target_username, _target_role = row
     if target_username == u.get("username"):
         conn.close()
         return RedirectResponse("/admin?err=cant_delete_self", status_code=303)
