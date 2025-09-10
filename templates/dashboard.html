@@ -1,94 +1,64 @@
-{% extends "base.html" %}
-{% block content %}
-<h1>Bu Ayın Kullanımı — {{ month_title }}</h1>
+<!doctype html>
+<html lang="tr">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<link rel="stylesheet" href="/static/styles.css">
+<title>Dashboard</title>
+</head>
+<body class="container">
+  <header class="topbar">
+    <div class="brand">Dashboard</div>
+    <nav><a href="/">Plan Oluştur</a> • <a href="/logout">Çıkış</a></nav>
+  </header>
 
-<div class="card">
-  <div class="grid2">
-    <div>
-      <div class="kpi"><span>Çalıştırma</span><strong>{{ summary.runs }}</strong></div>
-      <div class="kpi"><span>Toplam Görsel</span><strong>{{ summary.images }}</strong></div>
-    </div>
-    <div>
-      <div class="kpi"><span>Input Tokens</span><strong>{{ summary.in_tokens }}</strong></div>
-      <div class="kpi"><span>Output Tokens</span><strong>{{ summary.out_tokens }}</strong></div>
+  <div class="card">
+    <h2>Özet (Bu Ay)</h2>
+    <div class="stats">
+      <div class="stat"><div class="k">{{ summary.runs }}</div><div class="l">Çalıştırma</div></div>
+      <div class="stat"><div class="k">{{ summary.images }}</div><div class="l">Görsel</div></div>
+      <div class="stat"><div class="k">{{ summary.in_tokens }}</div><div class="l">Girdi Token</div></div>
+      <div class="stat"><div class="k">{{ summary.out_tokens }}</div><div class="l">Çıktı Token</div></div>
+      <div class="stat"><div class="k">${{ '%.4f'|format(summary.usd) }}</div><div class="l">USD</div></div>
+      <div class="stat"><div class="k">{{ '%.2f'|format(summary.try) }} ₺</div><div class="l">TRY</div></div>
     </div>
   </div>
-  <div class="grid2" style="margin-top:12px">
-    <div class="kpi"><span>Maliyet (USD)</span><strong>${{ '%.4f'|format(summary.usd) }}</strong></div>
-    <div class="kpi"><span>Maliyet (TRY)</span><strong>₺{{ '%.2f'|format(summary.try) }}</strong></div>
-  </div>
-  <p class="muted" style="margin-top:8px">
-    Model: <b>{{ model }}</b> • Tarifeler: in {{ rate_in }} $/1M, out {{ rate_out }} $/1M • Kur: $1 = ₺{{ usd_try_rate }}
-  </p>
 
-  <div style="margin-top:10px; display:flex; gap:10px; align-items:center;">
-    {% if user.role == 'admin' %}
-      <form method="get" action="/dashboard" style="display:flex; gap:8px; align-items:center;">
-        <label>Kullanıcı:</label>
-        <select name="user_id">
-          <option value="all" {{ 'selected' if filter_user_id=='all' else '' }}>Tümü</option>
-          <option value="me" {{ 'selected' if filter_user_id=='me' else '' }}>Ben</option>
-          {% for u in users %}
-            <option value="{{ u[0] }}" {{ 'selected' if (filter_user_id|string)==(u[0]|string) else '' }}>
-              {{ u[1] }} ({{ u[2] }})
-            </option>
+  <div class="card">
+    <h2>Son 50 İşlem</h2>
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr><th>Tarih</th><th>Doküman</th><th>Proje</th><th>Ay</th><th>Görsel</th><th>InTok</th><th>OutTok</th><th>USD</th><th>TRY</th></tr>
+        </thead>
+        <tbody>
+          {% for r in rows %}
+          <tr>
+            <td>{{ r[0] }}</td>
+            <td>{{ r[1] }}</td>
+            <td>{{ r[2] or '-' }}</td>
+            <td>{{ r[3] or '-' }}</td>
+            <td>{{ r[4] }}</td>
+            <td>{{ r[5] }}</td>
+            <td>{{ r[6] }}</td>
+            <td>${{ '%.4f'|format(r[7]) }}</td>
+            <td>{{ '%.2f'|format(r[8]) }} ₺</td>
+          </tr>
           {% endfor %}
-        </select>
-        <button class="btn btn-secondary" type="submit">Filtrele</button>
-      </form>
-      <a class="btn" href="/logs.xlsx?user_id={{ filter_user_id|urlencode }}">XLSX indir</a>
-    {% else %}
-      <a class="btn" href="/logs.xlsx?user_id=me">XLSX indir</a>
-    {% endif %}
+        </tbody>
+      </table>
+    </div>
   </div>
-</div>
 
-<h2>Son 50 Çalıştırma</h2>
-<div class="table">
-  <div class="thead">
-    <div>Tarih</div><div>Doküman</div><div>Proje/Otel</div><div>Ay</div>
-    <div>Görsel</div><div>In</div><div>Out</div><div>$</div><div>₺</div>
+  {% if user.role == 'admin' %}
+  <div class="card">
+    <h2>Log Temizleme (Yalnızca Admin)</h2>
+    <form method="post" action="/admin/clear_logs">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <label>Şu kadar günden eski kayıtları sil:</label>
+      <input type="number" name="older_than_days" min="1" placeholder="örn. 30">
+      <button class="btn danger" type="submit">Temizle</button>
+    </form>
   </div>
-  {% for r in rows %}
-    <div class="trow">
-      <div>{{ r[0] }}</div>
-      <div>{{ r[1] }}</div>
-      <div>{{ r[2] or '-' }}</div>
-      <div>{{ r[3] or '-' }}</div>
-      <div>{{ r[4] }}</div>
-      <div>{{ r[5] }}</div>
-      <div>{{ r[6] }}</div>
-      <div>${{ '%.5f'|format(r[7]) }}</div>
-      <div>₺{{ '%.2f'|format(r[8]) }}</div>
-    </div>
-  {% else %}
-    <p class="muted">Kayıt yok.</p>
-  {% endfor %}
-</div>
-
-{% if user.role == 'admin' %}
-  <h2>Log Temizleme (Yalnızca Yönetici)</h2>
-  <form action="/admin/clear_logs" method="post" class="card" style="max-width:520px">
-    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-    <div class="grid2">
-      <div class="field">
-        <label>Kaç günden eski silinsin?</label>
-        <input type="number" min="1" name="older_than_days" placeholder="Örn: 60">
-      </div>
-      <div class="field">
-        <label>Kullanıcı</label>
-        <select name="user_id">
-          <option value="all">Tümü</option>
-          {% for u in users %}
-            <option value="{{ u[0] }}">{{ u[1] }} ({{ u[2] }})</option>
-          {% endfor %}
-        </select>
-      </div>
-    </div>
-    <div class="form-actions">
-      <button class="btn btn-secondary" type="submit">Sil</button>
-    </div>
-    <p class="muted">Dikkat: Bu işlem geri alınamaz.</p>
-  </form>
-{% endif %}
-{% endblock %}
+  {% endif %}
+</body>
+</html>
