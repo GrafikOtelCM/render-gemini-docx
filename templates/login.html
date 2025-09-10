@@ -1,23 +1,17 @@
-<!doctype html>
-<html lang="tr">
-<head>
-<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<link rel="stylesheet" href="/static/styles.css">
-<title>Giriş</title>
-</head>
-<body class="container">
-  <div class="card">
-    <h1>Giriş</h1>
-    {% if error %}<div class="alert">{{ error }}</div>{% endif %}
-    <form method="post" action="/login">
-      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-      <input type="hidden" name="next" value="{{ next }}">
-      <label>Kullanıcı Adı</label>
-      <input name="username" required>
-      <label>Parola</label>
-      <input name="password" type="password" required>
-      <button type="submit" class="btn">Giriş Yap</button>
-    </form>
-  </div>
-</body>
-</html>
+{% extends "base.html" %}
+{% block content %}
+<div class="card auth">
+  <h1>Giriş Yap</h1>
+  {% if error %}<div class="alert">{{ error }}</div>{% endif %}
+  <form method="post" action="/login">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <input type="hidden" name="next" value="{{ next or '/' }}">
+    <label>Kullanıcı adı</label>
+    <input name="username" placeholder="kullanici" required />
+    <label>Şifre</label>
+    <input name="password" type="password" placeholder="••••••••" required />
+    <button type="submit">Giriş</button>
+  </form>
+  <p class="muted">Admin varsayılanı: <code>admin / Admin!123</code> (koddan değiştir)</p>
+</div>
+{% endblock %}
