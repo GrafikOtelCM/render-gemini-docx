@@ -1,14 +1,30 @@
 services:
   - type: web
-    name: gemini-docx-planner
+    name: gemini-docx
     env: python
     plan: free
-    region: frankfurt
-    buildCommand: pip install -r requirements.txt
-    startCommand: gunicorn app:app -k uvicorn.workers.UvicornWorker --workers 1 --timeout 120
+    buildCommand: "pip install -r requirements.txt"
+    startCommand: "gunicorn app:app -k uvicorn.workers.UvicornWorker --bind 0.0.0.0:$PORT --workers 1 --threads 2 --timeout 180"
     envVars:
       - key: GEMINI_API_KEY
-        sync: false
+        value: "AIzaSyDdUV3SuQ1bbhqILvR_70wGRSMdDGkOoNI"
+      - key: SECRET_KEY
+        value: "kJx2Jesr0Aq_R4oSdfaYBMKu4FDlWkslyZ_DH-nCxUzMaiOEO9Jl8XuRrSXzoF8del4cUjQ-lZxOFrmP4jYmXQ"
       - key: GEMINI_MODEL
-        value: gemini-1.5-flash
-    healthCheckPath: /healthz
+        value: "gemini-2.5-flash"
+      - key: USD_TRY_RATE
+        value: "41.20"
+      - key: RATE_IN_PER_MTOK
+        value: "0.30"
+      - key: RATE_OUT_PER_MTOK
+        value: "2.50"
+      - key: GEMINI_MAX_CONCURRENCY
+        value: "4"
+      - key: RATE_LIMIT_MAX
+        value: "12"
+      - key: ASSUME_IN_TOKENS
+        value: "400"
+      - key: ASSUME_OUT_TOKENS
+        value: "80"
+      - key: USAGE_DB_PATH
+        value: "/data/usage.db"
