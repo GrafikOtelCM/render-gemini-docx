@@ -15,13 +15,13 @@ from starlette.middleware.base import BaseHTTPMiddleware
 # Config
 # ---------------------------
 APP_NAME = os.getenv("APP_NAME", "Otel Planlama Stüdyosu")
-SECRET_KEY = os.getenv(
-    "SECRET_KEY",
-    "dev-" + secrets.token_urlsafe(48)
-)
+SECRET_KEY = os.getenv("SECRET_KEY", "dev-" + secrets.token_urlsafe(48))
 USAGE_DB_PATH = os.getenv("USAGE_DB_PATH", "/tmp/usage.db")
 
-# Gemini ayarları (opsiyonel burada kullanılmıyor ama env'de dursun)
+# Opsiyonel: oturumun ömrü (saniye). Örn: 86400 = 1 gün
+SESSION_MAX_AGE = int(os.getenv("SESSION_MAX_AGE", "0"))  # 0 veya ayarlanmamışsa tarayıcı kapanana kadar
+
+# Gemini (şimdilik kullanılmıyor)
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
 
@@ -30,7 +30,19 @@ GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
 # ---------------------------
 app = FastAPI(title=APP_NAME)
 
-app.add_middleware(SessionMiddleware, secret_key=SECRET_KEY, same_site="lax")
+# ÖNEMLİ: session çerez adını değiştiriyoruz ki eski oturumlar geçersiz olsun
+# https_only=True prod’da önerilir (Render’da HTTPS var). Lokal geliştirmede False yapılabilir.
+session_kwargs = {
+    "secret_key": SECRET_KEY,
+    "same_site": "lax",
+    "session_cookie": "ops_session_v3",  # <-- eski 'session' yerine yeni ad
+    "https_only": True,
+}
+if SESSION_MAX_AGE > 0:
+    session_kwargs["max_age"] = SESSION_MAX_AGE
+
+app.add_middleware(SessionMiddleware, **session_kwargs)
+
 templates = Jinja2Templates(directory="templates")
 
 if not os.path.exists("static"):
@@ -41,12 +53,13 @@ app.mount("/static", StaticFiles(directory="static"), name="static")
 # DB helpers
 # ---------------------------
 def get_db():
-    # /tmp Render free planda yazılabilir
     conn = sqlite3.connect(USAGE_DB_PATH, timeout=30, check_same_thread=False)
     return conn
 
 def ensure_db():
-    os.makedirs(os.path.dirname(USAGE_DB_PATH), exist_ok=True) if os.path.dirname(USAGE_DB_PATH) else None
+    dirn = os.path.dirname(USAGE_DB_PATH)
+    if dirn:
+        os.makedirs(dirn, exist_ok=True)
     conn = get_db()
     cur = conn.cursor()
     cur.execute("""
@@ -62,7 +75,6 @@ def ensure_db():
     conn.close()
 
 def hash_pw(pw: str) -> str:
-    # hızlı ve basit—bcrypt kurulu, onu kullanalım
     import bcrypt
     return bcrypt.hashpw(pw.encode(), bcrypt.gensalt()).decode()
 
@@ -135,23 +147,21 @@ def require_admin(request: Request):
     return user
 
 # ---------------------------
-# Middleware: template context
+# Middleware (şimdilik sadece pass-through)
 # ---------------------------
 class InjectGlobalsMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
-        # sadece session erişimi için SessionMiddleware zaten var
         response = await call_next(request)
         return response
 
 app.add_middleware(InjectGlobalsMiddleware)
 
 # ---------------------------
-# Startup: DB ve ilk admin
+# Startup
 # ---------------------------
 @app.on_event("startup")
 def on_startup():
     ensure_db()
-    # İlk admin—env'den veya hazır değer
     admin_user = os.getenv("ADMIN_CODE_USER", "admin")
     admin_pass = os.getenv("ADMIN_CODE_PASS", "admin123")
     existing = get_user_by_username(admin_user)
@@ -215,12 +225,19 @@ async def login_submit(
     request.session["user"] = {"id": u["id"], "username": u["username"], "role": u["role"]}
     return RedirectResponse(url=next or "/", status_code=303)
 
+# POST logout formu (CSRF korumalı)
 @app.post("/logout")
-def logout(request: Request, csrf_token: str = Form(...)):
+def logout_post(request: Request, csrf_token: str = Form(...)):
     try:
         require_csrf(request, csrf_token)
     except Exception:
         pass
+    request.session.clear()
+    return RedirectResponse(url="/login", status_code=303)
+
+# Kolaylık için GET /logout (örn. adres çubuğundan)
+@app.get("/logout")
+def logout_get(request: Request):
     request.session.clear()
     return RedirectResponse(url="/login", status_code=303)
 
@@ -253,33 +270,27 @@ async def planla(
     hotel_contact: str = Form(""),
     images: list[UploadFile] = File(default_factory=list)
 ):
-    # CSRF
     try:
         require_csrf(request, csrf_token)
     except Exception:
         return JSONResponse({"ok": False, "error": "CSRF"}, status_code=400)
 
-    # basit validasyonlar
     if every_days < 1:
         return JSONResponse({"ok": False, "error": "'Kaç günde bir' en az 1 olmalı."}, status_code=400)
     if not month or len(month) != 2:
         return JSONResponse({"ok": False, "error": "Ay seçimi zorunlu."}, status_code=400)
 
-    # Burada gerçek docx üretim mantığınız vardıysa ona entegrasyon yapılır.
-    # Şimdilik sadece parametreleri geri döndürelim ve front'ta indirilebilir dosya
-    # endpointine yönlendirelim (placeholder).
     return {
         "ok": True,
         "received": {
-            "file_name": file_name.strip() or "otel_plani.docx",
+            "file_name": (file_name or "otel_plani.docx").strip(),
             "month": month,
             "every_days": every_days,
-            "hotel_contact": hotel_contact.strip(),
+            "hotel_contact": (hotel_contact or "").strip(),
             "images_count": len(images or []),
         }
     }
 
-# İsteğe bağlı: bir örnek indirme endpoint’i (dummy)
 @app.get("/download-example")
 def download_example():
     from io import BytesIO
