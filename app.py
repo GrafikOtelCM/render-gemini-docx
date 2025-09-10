@@ -37,8 +37,9 @@ MAX_EDGE = 1280
 IMG_JPEG_QUALITY = 80
 
 DEFAULT_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "YOUR_API_KEY_HERE")
-SECRET_KEY = os.getenv("SECRET_KEY", "CHANGE_THIS_SECRET")
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "AIzaSyDdUV3SuQ1bbhqILvR_70wGRSMdDGkOoNI")
+SECRET_KEY = os.getenv("SECRET_KEY", "kJx2Jesr0Aq_R4oSdfaYBMKu4FDlWkslyZ_DH-nCxUzMaiOEO9Jl8XuRrSXzoF8del4cUjQ-lZxOFrmP4jYmXQ
+")
 
 # Ücretler (USD / 1M token)
 RATE_IN_PER_MTOK  = float(os.getenv("RATE_IN_PER_MTOK",  "0.30"))
@@ -61,8 +62,8 @@ BANNED_WORDS_RE = re.compile(r"(kaçış|kaçamak|kraliyet)", re.IGNORECASE)
 DB_PATH = os.getenv("USAGE_DB_PATH", "usage.db")
 
 # ========= Admin'i koddan belirle (burayı kendine göre düzenle) =========
-ADMIN_CODE_USER = "efendi.admin"        # <-- KENDİ ADMIN ADIN
-ADMIN_CODE_PASS = "SikiBirParola!2025"  # <-- KENDİ ADMIN PAROLAN
+ADMIN_CODE_USER = "otelgrafikadmin"        # <-- KENDİ ADMIN ADIN
+ADMIN_CODE_PASS = "otelgrafikpass"  # <-- KENDİ ADMIN PAROLAN
 # Var olan admin’i her açılışta BU parola ile güncellemek ister misin?
 ADMIN_FORCE_SYNC = False  # True yaparsan mevcut admin parolası da bu değere set edilir.
 
