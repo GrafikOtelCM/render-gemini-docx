@@ -1,47 +1,51 @@
-{% extends "layout.html" %}
+{% extends "base.html" %}
 {% block content %}
-<h2>Planlama Oluştur</h2>
+<section class="card">
+  <h1 class="card-title">Planlama Oluştur</h1>
+  <form id="plan-form" class="form-grid">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
 
-<form id="plan-form" method="post" action="/planla" enctype="multipart/form-data" class="card">
-  <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-
-  <div class="grid">
-    <label>
-      Dosya adı
-      <input name="file_name" placeholder="otel_plani.docx" value="otel_plani.docx">
+    <label class="field">
+      <span class="label">Dosya Adı</span>
+      <input class="input" name="file_name" placeholder="otel_plani.docx" />
     </label>
 
-    <label>
-      Ay seçin
-      <select name="month" required>
-        <option value="">Seçin…</option>
-        {% for val, label in months %}
-          <option value="{{ val }}">{{ label }}</option>
+    <label class="field">
+      <span class="label">Ay Seçimi</span>
+      <select class="input" name="month" required>
+        <option value="" disabled selected>Bir ay seçin…</option>
+        {% for code, name in months %}
+          <option value="{{ code }}">{{ name }}</option>
         {% endfor %}
       </select>
     </label>
 
-    <label>
-      Kaç günde bir?
-      <input type="number" name="every_days" min="1" step="1" value="1" required>
+    <label class="field">
+      <span class="label">Kaç günde bir?</span>
+      <input class="input" type="number" min="1" value="1" name="every_days" required />
     </label>
 
-    <label>
-      Otel iletişim bilgisi
-      <input name="hotel_contact" placeholder="Örn. +90..., info@..., Adres...">
+    <label class="field col-span-2">
+      <span class="label">Otel İletişim Bilgisi</span>
+      <textarea class="input" name="hotel_contact" rows="3" placeholder="Ad, telefon, e-posta, adres…"></textarea>
     </label>
-  </div>
 
-  <div class="uploader">
-    <label for="images">Görseller (sürükle-bırak veya tıklayın)</label>
-    <input id="images" name="images" type="file" accept="image/*" multiple>
-    <div id="thumbs" class="thumbs"></div>
-  </div>
+    <div class="col-span-2">
+      <span class="label">Görseller</span>
+      <div id="dropzone" class="dropzone" tabindex="0">
+        <input id="images" name="images" type="file" accept="image/*" multiple hidden />
+        <div class="dz-hint">
+          <strong>Dosyaları bırakın</strong> veya <button type="button" class="btn btn-ghost" id="pickBtn">Seç</button>
+          <div class="muted">JPG/PNG desteklenir. Küçük önizlemeler aşağıda gözükecek.</div>
+        </div>
+      </div>
+      <div id="thumbs" class="thumbs"></div>
+    </div>
 
-  <div class="actions">
-    <button class="btn" type="submit">Planı Oluştur</button>
-  </div>
-</form>
-
-<div id="result" class="card" style="display:none"></div>
+    <div class="actions col-span-2">
+      <button class="btn btn-primary" id="submitBtn" type="submit">Planı Oluştur</button>
+      <button class="btn btn-ghost" type="reset" id="resetBtn">Temizle</button>
+    </div>
+  </form>
+</section>
 {% endblock %}
