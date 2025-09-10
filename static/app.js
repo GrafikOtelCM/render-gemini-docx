@@ -12,7 +12,7 @@
       preview.innerHTML = '';
       let count = 0;
       Array.from(files).forEach((f) => {
-        if (!f.type.startsWith('image/')) return;
+        if (!f.type || !f.type.startsWith('image/')) return;
         const url = URL.createObjectURL(f);
         const item = document.createElement('div');
         item.className = 'thumb';
@@ -30,12 +30,11 @@
       if (fileCount) fileCount.textContent = `Seçili dosya: ${count}`;
     };
 
-    // Sürükle-bırak
-    ['dragenter','dragover'].forEach(ev =>
-      dropzone.addEventListener(ev, (e)=>{ e.preventDefault(); dropzone.classList.add('hover'); })
+    ['dragenter', 'dragover'].forEach(ev =>
+      dropzone.addEventListener(ev, (e) => { e.preventDefault(); dropzone.classList.add('hover'); })
     );
-    ;['dragleave','drop'].forEach(ev =>
-      dropzone.addEventListener(ev, (e)=>{ e.preventDefault(); dropzone.classList.remove('hover'); })
+    ['dragleave', 'drop'].forEach(ev =>
+      dropzone.addEventListener(ev, (e) => { e.preventDefault(); dropzone.classList.remove('hover'); })
     );
     dropzone.addEventListener('drop', (e) => {
       const dt = e.dataTransfer;
@@ -45,13 +44,10 @@
       fileInput.files = files;
       updatePreview(files);
     });
-
-    // Dosya seç
     dropzone.addEventListener('click', () => fileInput.click());
     fileInput.addEventListener('change', (e) => updatePreview(e.target.files));
   }
 
-  // Basit submit koruması
   if (planForm && submitBtn) {
     planForm.addEventListener('submit', () => {
       submitBtn.disabled = true;
