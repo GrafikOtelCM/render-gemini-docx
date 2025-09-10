@@ -1,0 +1,44 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="grid">
+  <div class="card">
+    <h2>Kullanıcı Oluştur</h2>
+    <form class="form" method="post" action="/admin/users/create">
+      <label>Kullanıcı Adı</label>
+      <input name="new_username" required>
+      <label>Parola</label>
+      <input type="password" name="new_password" required>
+      <label>Rol</label>
+      <select name="new_role">
+        <option value="employee">employee</option>
+        <option value="admin">admin</option>
+      </select>
+      <button class="btn primary" type="submit">Ekle</button>
+    </form>
+  </div>
+
+  <div class="card">
+    <h2>Kullanıcılar</h2>
+    <table class="table">
+      <thead><tr><th>ID</th><th>Kullanıcı</th><th>Rol</th><th></th></tr></thead>
+      <tbody>
+        {% for u in rows %}
+          <tr>
+            <td>{{ u.id }}</td>
+            <td>{{ u.username }}</td>
+            <td>{{ u.role }}</td>
+            <td>
+              <form method="post" action="/admin/users/delete" onsubmit="return confirm('Silinsin mi?');">
+                <input type="hidden" name="user_id" value="{{ u.id }}">
+                <button class="btn danger" type="submit">Sil</button>
+              </form>
+            </td>
+          </tr>
+        {% else %}
+          <tr><td colspan="4" class="muted">Kayıt yok.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endblock %}
