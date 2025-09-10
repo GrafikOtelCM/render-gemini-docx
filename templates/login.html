@@ -1,25 +1,23 @@
 {% extends "base.html" %}
 {% block content %}
-<div class="center-wrap">
-  <section class="card w-420">
-    <h1 class="card-title">Giriş Yap</h1>
-    {% if error %}
-      <div class="alert">{{ error }}</div>
-    {% endif %}
-    <form method="post" action="/login" class="form-grid">
-      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-      <input type="hidden" name="next" value="{{ next or '/' }}">
-      <label class="field">
-        <span class="label">Kullanıcı Adı</span>
-        <input class="input" name="username" autocomplete="username" required />
-      </label>
-      <label class="field">
-        <span class="label">Şifre</span>
-        <input class="input" type="password" name="password" autocomplete="current-password" required />
-      </label>
-      <button class="btn btn-primary mt-2" type="submit">Giriş</button>
-    </form>
-    <p class="muted mt-2">Admin kullanıcılarını Admin panelinden ekleyebilirsiniz.</p>
-  </section>
+<div class="card card-sm">
+  <h1>Giriş Yap</h1>
+  {% if request.query_params.get('err') == 'auth' %}
+    <div class="alert error">Kullanıcı adı veya şifre hatalı.</div>
+  {% elif request.query_params.get('err') == 'csrf' %}
+    <div class="alert error">CSRF doğrulaması başarısız. Sayfayı yenileyip tekrar deneyin.</div>
+  {% endif %}
+
+  <form method="post" action="/login" class="form">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <label>Kullanıcı Adı
+      <input name="username" required autocomplete="username">
+    </label>
+    <label>Şifre
+      <input name="password" type="password" required autocomplete="current-password">
+    </label>
+    <button type="submit" class="btn primary">Giriş Yap</button>
+  </form>
+  <p class="muted">Admin ilk kullanıcı: <code>{{ request.app.state.get('seed_info','admin / admin123') if false else '' }}</code></p>
 </div>
 {% endblock %}
