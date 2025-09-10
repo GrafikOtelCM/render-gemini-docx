@@ -10,7 +10,16 @@
   <header class="topbar">
     <div class="container" style="display:flex;justify-content:space-between;align-items:center;">
       <strong>{{ app_name }}</strong>
-      <nav><a class="navlink" href="/">Oluştur</a> • <a class="navlink" href="/dashboard">Dashboard</a></nav>
+      <nav>
+        {% if user %}
+          <a class="navlink" href="/">Oluştur</a> •
+          <a class="navlink" href="/dashboard">Dashboard</a> •
+          <span class="muted">{{ user.username }} ({{ user.role }})</span> •
+          <a class="navlink" href="/logout">Çıkış</a>
+        {% else %}
+          <a class="navlink" href="/login">Giriş</a>
+        {% endif %}
+      </nav>
     </div>
   </header>
   <main class="container">
@@ -18,7 +27,7 @@
   </main>
   <footer class="footer">
     <div class="container">
-      <small>© {{ app_name }} • Düşük kaynakta yüksek verim için optimize.</small>
+      <small>© {{ app_name }} • Çok kullanıcılı, rol tabanlı erişim + CSP/CSRF korumalı.</small>
     </div>
   </footer>
 </body>
