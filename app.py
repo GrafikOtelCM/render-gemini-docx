@@ -1,90 +1,205 @@
-import io, os, re, json, base64, datetime, sqlite3, csv, traceback, calendar
-from typing import List, Tuple
+import io, os, re, json, base64, datetime, sqlite3, csv, traceback, calendar, hashlib, asyncio, secrets
+from typing import List, Tuple, Optional
 
-import requests
-from fastapi import FastAPI, File, Form, Request, UploadFile
-from fastapi.responses import HTMLResponse, StreamingResponse, PlainTextResponse
+import httpx
+from fastapi import FastAPI, Request, UploadFile
+from fastapi.responses import HTMLResponse, StreamingResponse, PlainTextResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from jinja2 import TemplateNotFound
+from starlette.concurrency import run_in_threadpool
+from starlette.middleware.sessions import SessionMiddleware
+from starlette.middleware.base import BaseHTTPMiddleware
 
 from PIL import Image
 from docx import Document
 from docx.shared import Inches
+import bcrypt
+from openpyxl import Workbook
 
-# ====== Zaman dilimi (Europe/Istanbul) ======
+# ====== TZ (Europe/Istanbul) ======
 try:
     from zoneinfo import ZoneInfo
     TZ = ZoneInfo("Europe/Istanbul")
 except Exception:
-    TZ = None  # yoksa naive kullanırız
+    TZ = None
 
-# ========= Ayarlar =========
+# ========= Uygulama Ayarları =========
 APP_NAME = "Plan Otomasyon – Gemini to DOCX"
 MAX_IMAGES = 10
 MAX_EDGE = 1280
 IMG_JPEG_QUALITY = 80
-DEFAULT_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
 
-# Fiyatlar (USD / 1M token) - interaktif
+DEFAULT_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "AIzaSyDdUV3SuQ1bbhqILvR_70wGRSMdDGkOoNI")
+SECRET_KEY = os.getenv("SECRET_KEY", "CHANGE_THIS_SECRET")
+
+# Ücretler (USD / 1M token) - interaktif
 RATE_IN_PER_MTOK  = float(os.getenv("RATE_IN_PER_MTOK",  "0.30"))
 RATE_OUT_PER_MTOK = float(os.getenv("RATE_OUT_PER_MTOK", "2.50"))
-
 USD_TRY_RATE = float(os.getenv("USD_TRY_RATE", "41.2"))
+
+# usageMetadata yoksa varsayımlar (görsel başına)
 ASSUME_IN_TOKENS  = int(os.getenv("ASSUME_IN_TOKENS",  "400"))
 ASSUME_OUT_TOKENS = int(os.getenv("ASSUME_OUT_TOKENS", "80"))
 
+# Paralellik kontrolü
+GEMINI_MAX_CONCURRENCY = int(os.getenv("GEMINI_MAX_CONCURRENCY", "4"))
+GEMINI_SEM = asyncio.Semaphore(GEMINI_MAX_CONCURRENCY)
+
+# Basit oran sınırlama
+RATE_LIMIT_WINDOW = 60
+RATE_LIMIT_MAX = int(os.getenv("RATE_LIMIT_MAX", "12"))
+
 BANNED_WORDS_RE = re.compile(r"(kaçış|kaçamak|kraliyet)", re.IGNORECASE)
 DB_PATH = os.getenv("USAGE_DB_PATH", "usage.db")
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "AIzaSyDdUV3SuQ1bbhqILvR_70wGRSMdDGkOoNI")
 
-# ========= FastAPI =========
+# ========= FastAPI & Middleware =========
 app = FastAPI(title=APP_NAME)
+app.add_middleware(SessionMiddleware, secret_key=SECRET_KEY, max_age=60*60*8)  # 8 saat oturum
+
+class SecurityHeadersMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request, call_next):
+        resp = await call_next(request)
+        resp.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
+        resp.headers["X-Content-Type-Options"] = "nosniff"
+        resp.headers["X-Frame-Options"] = "DENY"
+        resp.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+        resp.headers["Permissions-Policy"] = "camera=(), geolocation=(), microphone=()"
+        resp.headers["Content-Security-Policy"] = (
+            "default-src 'self'; "
+            "img-src 'self' data: blob:; "
+            "style-src 'self' 'unsafe-inline'; "
+            "script-src 'self'; "
+            "connect-src 'self'; "
+            "frame-ancestors 'none'; "
+            "base-uri 'none'; form-action 'self'"
+        )
+        return resp
+app.add_middleware(SecurityHeadersMiddleware)
+
 if os.path.isdir("static"):
     app.mount("/static", StaticFiles(directory="static"), name="static")
-else:
-    print("Uyarı: 'static/' klasörü bulunamadı; CSS yüklenmeyecek.")
 templates = Jinja2Templates(directory="templates")
 
-# ========= DB =========
+# ========= DB Yardımcıları =========
+def get_db():
+    conn = sqlite3.connect(DB_PATH, check_same_thread=False, isolation_level=None)
+    conn.execute("PRAGMA journal_mode=WAL;")
+    return conn
+
 def ensure_db():
-    conn = sqlite3.connect(DB_PATH)
+    conn = get_db()
     cur = conn.cursor()
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS users (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      username TEXT UNIQUE NOT NULL,
+      pw_hash TEXT NOT NULL,
+      role TEXT NOT NULL CHECK(role IN ('admin','staff'))
+    );
+    """)
     cur.execute("""
     CREATE TABLE IF NOT EXISTS usage (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       ts TEXT NOT NULL,
+      user_id INTEGER,
+      user_key TEXT,
       model TEXT NOT NULL,
       doc_name TEXT NOT NULL,
+      project_tag TEXT,
+      plan_month TEXT,
       images INTEGER NOT NULL,
       in_tokens INTEGER NOT NULL,
       out_tokens INTEGER NOT NULL,
       cost_usd REAL NOT NULL,
-      cost_try REAL NOT NULL
+      cost_try REAL NOT NULL,
+      FOREIGN KEY(user_id) REFERENCES users(id)
     );
     """)
-    conn.commit()
-    conn.close()
-
-def log_usage(ts: str, model: str, doc_name: str, images: int,
-              in_tok: int, out_tok: int, cost_usd: float, cost_try: float):
-    conn = sqlite3.connect(DB_PATH)
-    cur = conn.cursor()
     cur.execute("""
-      INSERT INTO usage (ts, model, doc_name, images, in_tokens, out_tokens, cost_usd, cost_try)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-    """, (ts, model, doc_name, images, in_tok, out_tok, cost_usd, cost_try))
+    CREATE TABLE IF NOT EXISTS caption_cache (
+      hash TEXT PRIMARY KEY,
+      caption TEXT NOT NULL,
+      tags_json TEXT NOT NULL,
+      in_tokens INTEGER NOT NULL,
+      out_tokens INTEGER NOT NULL,
+      created_at TEXT NOT NULL
+    );
+    """)
+    # Kolon teminatı (migration)
+    def ensure_column(table, name, ddl):
+        cur.execute(f"PRAGMA table_info({table})")
+        cols = [r[1] for r in cur.fetchall()]
+        if name not in cols:
+            cur.execute(f"ALTER TABLE {table} ADD COLUMN {name} {ddl}")
+    ensure_column("usage", "project_tag", "TEXT")
+    ensure_column("usage", "plan_month", "TEXT")
+    ensure_column("usage", "user_id", "INTEGER")
     conn.commit()
     conn.close()
 
-def month_bounds(dt: datetime.datetime):
-    first = dt.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
-    nxt = (first.replace(year=first.year+1, month=1)
-           if first.month == 12 else first.replace(month=first.month+1))
-    last = nxt - datetime.timedelta(seconds=1)
-    return first, last
+def create_user_if_missing(username: str, password: str, role: str):
+    if not username or not password: return
+    conn = get_db(); cur = conn.cursor()
+    cur.execute("SELECT id FROM users WHERE username=?", (username,))
+    row = cur.fetchone()
+    if not row:
+        pw_hash = bcrypt.hashpw(password.encode("utf-8"), bcrypt.gensalt()).decode("utf-8")
+        cur.execute("INSERT INTO users (username, pw_hash, role) VALUES (?, ?, ?)", (username, pw_hash, role))
+        conn.commit()
+    conn.close()
 
-# ========= TR tarih formatı =========
+def find_user(username: str) -> Optional[dict]:
+    conn = get_db(); cur = conn.cursor()
+    cur.execute("SELECT id, username, pw_hash, role FROM users WHERE username=?", (username,))
+    row = cur.fetchone(); conn.close()
+    if not row: return None
+    return {"id": row[0], "username": row[1], "pw_hash": row[2], "role": row[3]}
+
+def log_usage(ts: str, user_id: Optional[int], user_key: str, model: str, doc_name: str,
+              project_tag: str, plan_month: str, images: int,
+              in_tok: int, out_tok: int, cost_usd: float, cost_try: float):
+    conn = get_db(); cur = conn.cursor()
+    cur.execute("""
+      INSERT INTO usage (ts, user_id, user_key, model, doc_name, project_tag, plan_month,
+                         images, in_tokens, out_tokens, cost_usd, cost_try)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    """, (ts, user_id, user_key, model, doc_name, project_tag, plan_month,
+          images, in_tok, out_tok, cost_usd, cost_try))
+    conn.commit(); conn.close()
+
+def cache_get(h: str):
+    conn = get_db(); cur = conn.cursor()
+    cur.execute("SELECT caption, tags_json, in_tokens, out_tokens FROM caption_cache WHERE hash=?", (h,))
+    row = cur.fetchone(); conn.close()
+    if not row: return None
+    caption, tags_json, in_t, out_t = row
+    return caption, json.loads(tags_json), int(in_t), int(out_t)
+
+def cache_put(h: str, caption: str, tags: List[str], in_t: int, out_t: int):
+    conn = get_db(); cur = conn.cursor()
+    cur.execute("""
+      INSERT OR REPLACE INTO caption_cache (hash, caption, tags_json, in_tokens, out_tokens, created_at)
+      VALUES (?, ?, ?, ?, ?, ?)
+    """, (h, caption, json.dumps(tags, ensure_ascii=False), int(in_t), int(out_t),
+          (datetime.datetime.now(TZ) if TZ else datetime.datetime.now()).isoformat(timespec="seconds")))
+    conn.commit(); conn.close()
+
+# ========= CSRF =========
+def get_csrf_token(request: Request) -> str:
+    tok = request.session.get("csrf")
+    if not tok:
+        tok = secrets.token_urlsafe(32)
+        request.session["csrf"] = tok
+    return tok
+
+def check_csrf(request: Request, form) -> bool:
+    sess = request.session.get("csrf")
+    posted = form.get("csrf_token")
+    return bool(sess and posted and sess == posted)
+
+# ========= Takvim yardımcıları =========
 MONTHS_TR = ["Ocak","Şubat","Mart","Nisan","Mayıs","Haziran","Temmuz","Ağustos","Eylül","Ekim","Kasım","Aralık"]
 WEEKDAYS_TR = ["Pazartesi","Salı","Çarşamba","Perşembe","Cuma","Cumartesi","Pazar"]  # Monday=0
 
@@ -92,54 +207,36 @@ def format_date_tr(d: datetime.date) -> str:
     wd = WEEKDAYS_TR[d.weekday()]
     return f"{d.day:02d} {MONTHS_TR[d.month-1]} {d.year} {wd}"
 
-# ========= Plan takvimi üretimi =========
 def generate_schedule(year: int, month: int, every_n_days: int) -> List[datetime.date]:
-    # Ayın 1'inden başla, 29'unda bitir (ayın gerçek uzunluğu dikkate alınır)
     last_day = calendar.monthrange(year, month)[1]
     cutoff = min(29, last_day)
-    if every_n_days < 1:
-        every_n_days = 1
-    dates = []
-    day = 1
+    if every_n_days < 1: every_n_days = 1
+    dates = []; day = 1
     while day <= cutoff:
         dates.append(datetime.date(year, month, day))
         day += every_n_days
     return dates
 
-# ========= JSON Ayıklayıcı =========
+# ========= JSON ayıklayıcı =========
 import re as _re
 def _extract_json_maybe(text: str):
-    if not text:
-        return None
+    if not text: return None
     m = _re.search(r"```(?:json)?\s*({[\s\S]*?})\s*```", text, _re.IGNORECASE)
     if m:
-        try:
-            return json.loads(m.group(1))
-        except Exception:
-            pass
+        try: return json.loads(m.group(1))
+        except Exception: pass
     m = _re.search(r"({[\s\S]*})", text)
     if m:
         raw = m.group(1)
         open_cnt = raw.count("{"); close_cnt = raw.count("}")
-        if close_cnt < open_cnt:
-            raw = raw + ("}" * (open_cnt - close_cnt))
-        try:
-            return json.loads(raw)
-        except Exception:
-            pass
+        if close_cnt < open_cnt: raw = raw + ("}" * (open_cnt - close_cnt))
+        try: return json.loads(raw)
+        except Exception: pass
     return None
 
-# ========= DOCX yardımcıları =========
-def _set_doc_margins(section, top=0.5, bottom=0.5, left=0.5, right=0.5):
-    section.top_margin = Inches(top)
-    section.bottom_margin = Inches(bottom)
-    section.left_margin = Inches(left)
-    section.right_margin = Inches(right)
-
-def make_preview_bytes(upload: UploadFile) -> Tuple[bytes, str]:
-    raw = upload.file.read()
-    upload.file.seek(0)
-    img = Image.open(io.BytesIO(raw)).convert("RGB")
+# ========= Görsel yardımcıları =========
+def jpeg_preview_bytes(raw_bytes: bytes) -> bytes:
+    img = Image.open(io.BytesIO(raw_bytes)).convert("RGB")
     w, h = img.size
     scale = min(MAX_EDGE / max(w, h), 1.0)
     if scale < 1.0:
@@ -147,50 +244,49 @@ def make_preview_bytes(upload: UploadFile) -> Tuple[bytes, str]:
     out = io.BytesIO()
     img.save(out, format="JPEG", quality=IMG_JPEG_QUALITY, optimize=True, progressive=True)
     out.seek(0)
-    fname = os.path.splitext(upload.filename or f"img_{id(upload)}")[0]
-    return out.read(), fname
+    return out.read()
 
-# ========= Gemini çağrısı =========
-def call_gemini_for_caption_and_tags(jpeg_bytes: bytes):
+async def make_preview_bytes(upload: UploadFile) -> Tuple[bytes, str, str]:
+    raw = await upload.read()
+    await run_in_threadpool(lambda: None)
+    jpeg_bytes = await run_in_threadpool(jpeg_preview_bytes, raw)
+    fname = os.path.splitext(upload.filename or f"img_{id(upload)}")[0]
+    h = hashlib.sha256(jpeg_bytes).hexdigest()
+    return jpeg_bytes, fname, h
+
+# ========= Gemini çağrısı (ASYNC) =========
+async def call_gemini_for_caption_and_tags(jpeg_bytes: bytes) -> Tuple[str, List[str], int, int]:
     if not GEMINI_API_KEY or GEMINI_API_KEY == "YOUR_API_KEY_HERE":
         raise RuntimeError("GEMINI_API_KEY tanımlı değil. Render Environment'a ekleyin.")
 
     base64_img = base64.b64encode(jpeg_bytes).decode("utf-8")
-
     prompt = (
         "Yalnızca JSON üret. Şema: {\"caption\": string, \"hashtags\": [string, string, string]}.\n"
         "Kurallar: Türkçe, 1-2 cümle kısa pazarlama açıklaması; emoji makul; marka/özel isim verme. "
         "Tam 3 hashtag üret. Şu kelimeleri asla kullanma: kaçış, kaçamak, kraliyet."
     )
-
-    generation_config = { "response_mime_type": "application/json" }
-
     payload = {
         "contents": [{
             "role": "user",
-            "parts": [
-                {"text": prompt},
-                {"inlineData": {"mimeType": "image/jpeg", "data": base64_img}}
-            ]
+            "parts": [{"text": prompt},
+                      {"inlineData": {"mimeType": "image/jpeg", "data": base64_img}}]
         }],
-        "generationConfig": generation_config
+        "generationConfig": {"response_mime_type": "application/json"}
     }
-
     url = f"https://generativelanguage.googleapis.com/v1beta/models/{DEFAULT_MODEL}:generateContent?key={GEMINI_API_KEY}"
-    try:
-        res = requests.post(url, json=payload, timeout=60)
-    except Exception as e:
-        raise RuntimeError(f"Gemini bağlantı hatası: {e}")
+
+    async with GEMINI_SEM:
+        async with httpx.AsyncClient(timeout=60) as client:
+            res = await client.post(url, json=payload)
 
     if res.status_code != 200:
         msg = res.text.strip()[:500]
         raise RuntimeError(f"Gemini API hata {res.status_code}: {msg}")
 
     data = res.json()
-
     in_tok, out_tok = ASSUME_IN_TOKENS, ASSUME_OUT_TOKENS
     try:
-        usage = data.get("usageMetadata") or data.get("candidates", [{}])[0].get("usageMetadata") or {}
+        usage = data.get("usageMetadata") or (data.get("candidates", [{}])[0].get("usageMetadata") or {})
         in_tok  = int(usage.get("promptTokenCount", in_tok))
         out_tok = int(usage.get("candidatesTokenCount", usage.get("outputTokenCount", out_tok)))
     except Exception:
@@ -203,13 +299,11 @@ def call_gemini_for_caption_and_tags(jpeg_bytes: bytes):
         obj = json.loads(text)
     except Exception:
         obj = _extract_json_maybe(text)
-
     if not isinstance(obj, dict):
         raise RuntimeError(f"Gemini beklenen JSON'u döndürmedi. Ham yanıtın başı: {text[:240]}")
 
     caption = str(obj.get("caption", "")).strip()
     hashtags = obj.get("hashtags", [])
-
     caption = re.sub(r"\s+", " ", caption)
     caption = BANNED_WORDS_RE.sub("", caption)
     caption = re.sub(r"https?://\S+", "", caption).strip()
@@ -217,189 +311,218 @@ def call_gemini_for_caption_and_tags(jpeg_bytes: bytes):
     tags = []
     for t in (hashtags or []):
         t = str(t).strip()
-        if not t:
-            continue
-        if not t.startswith("#"):
-            t = "#" + t.lstrip("#")
-        if BANNED_WORDS_RE.search(t):
-            continue
-        if t not in tags:
-            tags.append(t)
-        if len(tags) == 3:
-            break
+        if not t: continue
+        if not t.startswith("#"): t = "#" + t.lstrip("#")
+        if BANNED_WORDS_RE.search(t): continue
+        if t not in tags: tags.append(t)
+        if len(tags) == 3: break
 
     if not caption or len(tags) != 3:
         raise RuntimeError(f"Gemini JSON eksik/boş döndü. caption='{caption}', tags={tags}")
 
     return caption, tags, in_tok, out_tok
 
-# ========= DOCX üretimi + kullanım toplama =========
-def build_docx_and_collect_usage(doc_name: str, contact_info: str,
-                                 images: List[Tuple[str, bytes, str]],
-                                 plan_dates: List[datetime.date]) -> Tuple[bytes, int, int]:
+# ========= DOCX yazımı =========
+def _build_docx_bytes(doc_name: str, contact_info: str,
+                      images: List[Tuple[str, bytes, str]],
+                      plan_dates: List[datetime.date],
+                      captions: List[Tuple[str, List[str], int, int]]) -> bytes:
     document = Document()
-    _set_doc_margins(document.sections[0], 0.5, 0.5, 0.5, 0.5)
-
-    total_in, total_out = 0, 0
+    section = document.sections[0]
+    section.top_margin = section.bottom_margin = section.left_margin = section.right_margin = Inches(0.5)
 
     for idx, (stub, jpeg_bytes, _) in enumerate(images):
-        # 1) Tarih başlığı (görselin üstünde)
-        if idx < len(plan_dates):
-            date_str = format_date_tr(plan_dates[idx])
-        else:
-            date_str = "Tarih plan dışı"
-        p = document.add_paragraph()
-        run = p.add_run(f"Paylaşım Tarihi: {date_str}")
-        run.bold = True
+        date_str = format_date_tr(plan_dates[idx]) if idx < len(plan_dates) else "Tarih plan dışı"
+        p = document.add_paragraph(); r = p.add_run(f"Paylaşım Tarihi: {date_str}"); r.bold = True
 
-        # 2) Görsel
         pic_stream = io.BytesIO(jpeg_bytes)
         try:
             document.add_picture(pic_stream, width=Inches(6))
         except Exception:
             im = Image.open(io.BytesIO(jpeg_bytes)).convert("RGB")
-            buf = io.BytesIO()
-            im.save(buf, format="JPEG", quality=IMG_JPEG_QUALITY)
-            buf.seek(0)
+            buf = io.BytesIO(); im.save(buf, format="JPEG", quality=IMG_JPEG_QUALITY); buf.seek(0)
             document.add_picture(buf, width=Inches(6))
 
-        # 3) Metinler
-        caption, tags, in_tok, out_tok = call_gemini_for_caption_and_tags(jpeg_bytes)
-        total_in  += in_tok
-        total_out += out_tok
-
-        document.add_paragraph(caption)
+        cap, tags, _, _ = captions[idx]
+        document.add_paragraph(cap)
         document.add_paragraph(contact_info)
         document.add_paragraph(" ".join(tags))
 
         if idx != len(images) - 1:
             document.add_page_break()
 
-    out = io.BytesIO()
-    document.save(out)
-    out.seek(0)
-    return out.read(), total_in, total_out
+    out = io.BytesIO(); document.save(out); out.seek(0)
+    return out.read()
 
-# ========= Routes =========
+async def build_docx_and_collect_usage(doc_name: str, contact_info: str,
+                                       images: List[Tuple[str, bytes, str]],
+                                       plan_dates: List[datetime.date]) -> Tuple[bytes, int, int, List[Tuple[str,List[str],int,int]]]:
+    total_in = total_out = 0
+    results: List[Tuple[str, List[str], int, int]] = [None] * len(images)
+
+    async def process_one(i: int):
+        nonlocal total_in, total_out
+        _, jpeg_bytes, h = images[i]
+        cached = cache_get(h)
+        if cached:
+            cap, tags, in_t, out_t = cached
+        else:
+            cap, tags, in_t, out_t = await call_gemini_for_caption_and_tags(jpeg_bytes)
+            cache_put(h, cap, tags, in_t, out_t)
+        results[i] = (cap, tags, in_t, out_t)
+
+    await asyncio.gather(*(process_one(i) for i in range(len(images))))
+
+    for _, _, in_t, out_t in results:
+        total_in += in_t; total_out += out_t
+
+    content = await run_in_threadpool(_build_docx_bytes, doc_name, contact_info, images, plan_dates, results)
+    return content, total_in, total_out, results
+
+# ========= Rate limit =========
+from collections import defaultdict, deque
+_rate_state = defaultdict(deque)
+
+class RateLimitMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request, call_next):
+        if request.url.path == "/generate":
+            ip = request.client.host if request.client else "unknown"
+            now = datetime.datetime.now().timestamp()
+            q = _rate_state[ip]
+            while q and now - q[0] > RATE_LIMIT_WINDOW:
+                q.popleft()
+            if len(q) >= RATE_LIMIT_MAX:
+                return PlainTextResponse("Çok fazla istek. Lütfen birazdan tekrar deneyin.", status_code=429)
+            q.append(now)
+        return await call_next(request)
+app.add_middleware(RateLimitMiddleware)
+
+# ========= Auth yardımcıları =========
+def current_user(request: Request) -> Optional[dict]:
+    u = request.session.get("user")
+    return u if u else None
+
+def require_login(request: Request) -> Optional[RedirectResponse]:
+    if not current_user(request):
+        return RedirectResponse(url="/login?next=" + request.url.path, status_code=303)
+    return None
+
+def require_admin(request: Request) -> Optional[RedirectResponse]:
+    u = current_user(request)
+    if not u: return RedirectResponse(url="/login?next=" + request.url.path, status_code=303)
+    if u.get("role") != "admin":
+        return RedirectResponse(url="/", status_code=303)
+    return None
+
+# ========= Startup =========
 @app.on_event("startup")
 def _startup():
     ensure_db()
+    create_user_if_missing(os.getenv("ADMIN_USER"),  os.getenv("ADMIN_PASS"),  "admin")
+    create_user_if_missing(os.getenv("STAFF1_USER"), os.getenv("STAFF1_PASS"), "staff")
+    create_user_if_missing(os.getenv("STAFF2_USER"), os.getenv("STAFF2_PASS"), "staff")
 
 @app.get("/healthz")
 def healthz():
     return {"ok": True}
 
+# ========= Login / Logout =========
+@app.get("/login", response_class=HTMLResponse)
+def login_get(request: Request, next: str = "/"):
+    return templates.TemplateResponse("login.html", {"request": request, "app_name": APP_NAME, "next": next, "csrf_token": get_csrf_token(request)})
+
+@app.post("/login")
+async def login_post(request: Request):
+    form = await request.form()
+    if not check_csrf(request, form):
+        return PlainTextResponse("CSRF doğrulaması başarısız", status_code=403)
+    username = (form.get("username") or "").strip()
+    password = (form.get("password") or "").strip()
+    next_url = form.get("next") or "/"
+    user = find_user(username)
+    if not user or not bcrypt.checkpw(password.encode("utf-8"), user["pw_hash"].encode("utf-8")):
+        return templates.TemplateResponse("login.html",
+            {"request": request, "app_name": APP_NAME, "error": "Geçersiz kullanıcı veya parola", "next": next_url, "csrf_token": get_csrf_token(request)},
+            status_code=401)
+    request.session["user"] = {"id": user["id"], "username": user["username"], "role": user["role"]}
+    return RedirectResponse(url=next_url, status_code=303)
+
+@app.get("/logout")
+def logout(request: Request):
+    request.session.clear()
+    return RedirectResponse(url="/login", status_code=303)
+
+# ========= Sayfalar =========
 @app.get("/", response_class=HTMLResponse)
 def index(request: Request):
+    need = require_login(request)
+    if need: return need
     now = datetime.datetime.now(TZ) if TZ else datetime.datetime.now()
     suggested = now.strftime("%Y%m%d-%H%M")
-    default_month = now.strftime("%Y-%m")  # input type=month için
+    default_month = now.strftime("%Y-%m")
     try:
         return templates.TemplateResponse(
             "index.html",
             {"request": request, "app_name": APP_NAME,
              "suggested_name": f"Instagram_Plani_{suggested}",
-             "default_month": default_month}
+             "default_month": default_month,
+             "user": current_user(request),
+             "csrf_token": get_csrf_token(request)}
         )
     except TemplateNotFound:
         return HTMLResponse(f"<h1>{APP_NAME}</h1><p>templates/index.html bulunamadı.</p>", status_code=200)
 
-@app.post("/generate", response_class=HTMLResponse)
-async def generate(
-    request: Request,
-    doc_name: str = Form(...),
-    contact_info: str = Form(...),
-    plan_month: str = Form(...),         # YYYY-MM
-    interval_days: int = Form(...),      # kaç günde bir
-    files: List[UploadFile] = File(...)
-):
-    files = [f for f in files if (f and f.filename)]
-    if not files:
-        return PlainTextResponse("Görsel yüklenmedi. Lütfen en az 1 görsel seçin.", status_code=400)
-    if len(files) > MAX_IMAGES:
-        return PlainTextResponse(f"En fazla {MAX_IMAGES} görsel yükleyebilirsiniz.", status_code=400)
+# ========= Month bounds =========
+def month_bounds(dt: datetime.datetime):
+    first = dt.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+    nxt = (first.replace(year=first.year+1, month=1) if first.month == 12 else first.replace(month=first.month+1))
+    last = nxt - datetime.timedelta(seconds=1)
+    return first, last
 
-    # Plan ayı ayrıştır
-    try:
-        year_str, month_str = plan_month.split("-")
-        year, month = int(year_str), int(month_str)
-        if not (1 <= month <= 12):
-            raise ValueError()
-    except Exception:
-        return PlainTextResponse("Plan ayı hatalı. Lütfen YYYY-AA formatında bir ay seçin.", status_code=400)
-
-    # Takvim üret
-    dates = generate_schedule(year, month, int(interval_days))
-    if len(files) > len(dates):
-        return PlainTextResponse(
-            f"Seçilen aralıkla {len(dates)} tarih üretiliyor, ancak {len(files)} görsel yüklediniz. "
-            f"Aralığı küçültün (örn. 1-2 gün) ya da görsel sayısını azaltın.",
-            status_code=400
-        )
-
-    # Görselleri işleme
-    processed = []
-    for f in files:
-        try:
-            jpeg_bytes, stub = make_preview_bytes(f)
-            processed.append((stub, jpeg_bytes, f.filename))
-        except Exception:
-            return PlainTextResponse(f"{f.filename} okunamadı. Lütfen geçerli bir görsel yükleyin.", status_code=400)
-
-    # DOCX + kullanım
-    try:
-        content, total_in, total_out = build_docx_and_collect_usage(doc_name, contact_info, processed, dates[:len(processed)])
-    except Exception as e:
-        print("Üretim hatası:", traceback.format_exc()[:2000])
-        return PlainTextResponse(f"Üretim hatası: {str(e)}", status_code=500)
-
-    # Maliyet
-    cost_usd = (total_in / 1_000_000.0) * RATE_IN_PER_MTOK + (total_out / 1_000_000.0) * RATE_OUT_PER_MTOK
-    cost_try = cost_usd * USD_TRY_RATE
-
-    # Log
-    ts = (datetime.datetime.now(TZ) if TZ else datetime.datetime.now()).isoformat(timespec="seconds")
-    try:
-        log_usage(ts, DEFAULT_MODEL, doc_name, len(processed), total_in, total_out, cost_usd, cost_try)
-    except Exception as e:
-        print("DB log error:", e)
-
-    # İndirme
-    filename = f"{doc_name}.docx"
-    headers = {
-        "Content-Disposition": f'attachment; filename="{filename}"',
-        "X-API-Cost-USD": f"{cost_usd:.6f}",
-        "X-API-Cost-TRY": f"{cost_try:.2f}",
-        "X-API-InTokens": str(total_in),
-        "X-API-OutTokens": str(total_out),
-    }
-    return StreamingResponse(
-        io.BytesIO(content),
-        media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-        headers=headers
-    )
-
+# ========= Dashboard =========
 @app.get("/dashboard", response_class=HTMLResponse)
-def dashboard(request: Request):
+def dashboard(request: Request, user_id: str = "me"):
+    need = require_login(request)
+    if need: return need
+    me = current_user(request)
+
     now = datetime.datetime.now(TZ) if TZ else datetime.datetime.now()
     start, end = month_bounds(now)
-    conn = sqlite3.connect(DB_PATH)
-    cur = conn.cursor()
-    cur.execute("""
+
+    conn = get_db(); cur = conn.cursor()
+    params = [start.isoformat(), end.isoformat()]
+    where = "WHERE ts >= ? AND ts <= ?"
+
+    if me["role"] == "admin":
+        selected_user_id = None
+        if user_id not in ("me", "all"):
+            try: selected_user_id = int(user_id)
+            except: selected_user_id = None
+        if selected_user_id is not None:
+            where += " AND user_id = ?"; params.append(selected_user_id)
+    else:
+        where += " AND user_id = ?"; params.append(me["id"])
+
+    cur.execute(f"""
       SELECT COUNT(*), COALESCE(SUM(images),0), COALESCE(SUM(in_tokens),0), COALESCE(SUM(out_tokens),0),
              COALESCE(SUM(cost_usd),0), COALESCE(SUM(cost_try),0)
       FROM usage
-      WHERE ts >= ? AND ts <= ?
-    """, (start.isoformat(), end.isoformat()))
+      {where}
+    """, params)
     cnt, img_sum, in_sum, out_sum, usd_sum, try_sum = cur.fetchone() or (0,0,0,0,0.0,0.0)
 
-    cur.execute("""
-      SELECT ts, doc_name, images, in_tokens, out_tokens, cost_usd, cost_try
+    cur.execute(f"""
+      SELECT ts, doc_name, project_tag, plan_month, images, in_tokens, out_tokens, cost_usd, cost_try
       FROM usage
-      WHERE ts >= ? AND ts <= ?
-      ORDER BY ts DESC LIMIT 30
-    """, (start.isoformat(), end.isoformat()))
+      {where}
+      ORDER BY ts DESC LIMIT 50
+    """, params)
     rows = cur.fetchall()
+
+    users = []
+    if me["role"] == "admin":
+        cur.execute("SELECT id, username, role FROM users ORDER BY role DESC, username ASC")
+        users = cur.fetchall()
     conn.close()
 
     try:
@@ -413,29 +536,165 @@ def dashboard(request: Request):
             "usd_try_rate": USD_TRY_RATE,
             "model": DEFAULT_MODEL,
             "rate_in": RATE_IN_PER_MTOK,
-            "rate_out": RATE_OUT_PER_MTOK
+            "rate_out": RATE_OUT_PER_MTOK,
+            "user": me,
+            "users": users,
+            "filter_user_id": user_id,
+            "csrf_token": get_csrf_token(request)
         })
     except TemplateNotFound:
         return HTMLResponse("<h1>Dashboard</h1><p>templates/dashboard.html bulunamadı.</p>", status_code=200)
 
-@app.get("/dashboard.csv", response_class=PlainTextResponse)
-def dashboard_csv():
+# ========= XLSX export =========
+@app.get("/logs.xlsx")
+def logs_xlsx(request: Request, user_id: str = "me"):
+    need = require_login(request)
+    if need: return need
+    me = current_user(request)
+
     now = datetime.datetime.now(TZ) if TZ else datetime.datetime.now()
     start, end = month_bounds(now)
-    conn = sqlite3.connect(DB_PATH)
-    cur = conn.cursor()
-    cur.execute("""
-      SELECT ts, model, doc_name, images, in_tokens, out_tokens, cost_usd, cost_try
+
+    conn = get_db(); cur = conn.cursor()
+    params = [start.isoformat(), end.isoformat()]
+    where = "WHERE ts >= ? AND ts <= ?"
+
+    if me["role"] == "admin":
+        selected_user_id = None
+        if user_id not in ("me", "all"):
+            try: selected_user_id = int(user_id)
+            except: selected_user_id = None
+        if selected_user_id is not None:
+            where += " AND user_id = ?"; params.append(selected_user_id)
+    else:
+        where += " AND user_id = ?"; params.append(me["id"])
+
+    cur.execute(f"""
+      SELECT ts, user_id, model, doc_name, project_tag, plan_month, images, in_tokens, out_tokens, cost_usd, cost_try
       FROM usage
-      WHERE ts >= ? AND ts <= ?
+      {where}
       ORDER BY ts ASC
-    """, (start.isoformat(), end.isoformat()))
+    """, params)
     rows = cur.fetchall()
     conn.close()
 
-    buf = io.StringIO()
-    writer = csv.writer(buf)
-    writer.writerow(["ts","model","doc_name","images","in_tokens","out_tokens","cost_usd","cost_try"])
-    for r in rows:
-        writer.writerow(r)
-    return PlainTextResponse(buf.getvalue(), media_type="text/csv")
+    wb = Workbook(); ws = wb.active; ws.title = "Logs"
+    headers = ["ts","user_id","model","doc_name","project_tag","plan_month","images","in_tokens","out_tokens","cost_usd","cost_try"]
+    ws.append(headers)
+    for r in rows: ws.append(list(r))
+
+    buf = io.BytesIO(); wb.save(buf); buf.seek(0)
+    fname = f"logs_{('all' if me['role']=='admin' and user_id=='all' else 'me')}_{now.strftime('%Y%m')}.xlsx"
+    return StreamingResponse(buf, media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                             headers={"Content-Disposition": f'attachment; filename="{fname}"'})
+
+# ========= Admin: log temizleme =========
+@app.post("/admin/clear_logs")
+async def admin_clear_logs(request: Request):
+    need = require_admin(request)
+    if need: return need
+    form = await request.form()
+    if not check_csrf(request, form):
+        return PlainTextResponse("CSRF doğrulaması başarısız", status_code=403)
+
+    older_than_days = int(form.get("older_than_days") or "0")
+    target_user_id = form.get("user_id")  # "all" veya belirli id
+
+    now = datetime.datetime.now(TZ) if TZ else datetime.datetime.now()
+    cutoff = now - datetime.timedelta(days=older_than_days) if older_than_days > 0 else None
+
+    conn = get_db(); cur = conn.cursor()
+    if cutoff and target_user_id and target_user_id != "all":
+        cur.execute("DELETE FROM usage WHERE ts < ? AND user_id = ?", (cutoff.isoformat(), int(target_user_id)))
+    elif cutoff and (not target_user_id or target_user_id == "all"):
+        cur.execute("DELETE FROM usage WHERE ts < ?", (cutoff.isoformat(),))
+    elif (not cutoff) and target_user_id and target_user_id != "all":
+        cur.execute("DELETE FROM usage WHERE user_id = ?", (int(target_user_id),))
+    else:
+        conn.close()
+        return RedirectResponse(url="/dashboard", status_code=303)
+
+    conn.commit(); conn.close()
+    return RedirectResponse(url="/dashboard", status_code=303)
+
+# ========= Plan üretimi (POST /generate) =========
+@app.post("/generate")
+async def generate(request: Request):
+    # Auth
+    need = require_login(request)
+    if need: return need
+    user = current_user(request)
+
+    # CSRF + form
+    form = await request.form()
+    if not check_csrf(request, form):
+        return PlainTextResponse("CSRF doğrulaması başarısız", status_code=403)
+
+    # Form alanları
+    doc_name = (form.get("doc_name") or "").strip()
+    contact_info = (form.get("contact_info") or "").strip()
+    plan_month = (form.get("plan_month") or "").strip()   # YYYY-MM
+    interval_days = int(form.get("interval_days") or "1")
+    project_tag = (form.get("project_tag") or "").strip()
+    files = form.getlist("files")
+
+    if not files:
+        return PlainTextResponse("Görsel yüklenmedi. Lütfen en az 1 görsel seçin.", status_code=400)
+    if len(files) > MAX_IMAGES:
+        return PlainTextResponse(f"En fazla {MAX_IMAGES} görsel yükleyebilirsiniz.", status_code=400)
+
+    # Plan ayı
+    try:
+        y_s, m_s = plan_month.split("-"); year, month = int(y_s), int(m_s)
+        if not (1 <= month <= 12): raise ValueError()
+    except Exception:
+        return PlainTextResponse("Plan ayı hatalı. Lütfen YYYY-AA formatında bir ay seçin.", status_code=400)
+
+    dates = generate_schedule(year, month, int(interval_days))
+    if len(files) > len(dates):
+        return PlainTextResponse(
+            f"Seçilen aralıkla {len(dates)} tarih üretiliyor, ancak {len(files)} görsel yüklediniz. "
+            f"Aralığı küçültün (örn. 1-2 gün) ya da görsel sayısını azaltın.", status_code=400
+        )
+
+    # Görselleri hazırla (önizleme + namespace'li hash)
+    async def prep(upload: UploadFile):
+        jpeg_bytes, stub, h = await make_preview_bytes(upload)
+        namespace = f"{user['id']}|{project_tag}"
+        h_ns = hashlib.sha256((namespace + "|" + h).encode()).hexdigest()
+        return (stub, jpeg_bytes, h_ns)
+
+    processed = await asyncio.gather(*(prep(f) for f in files))
+
+    # DOCX + usage
+    try:
+        content, total_in, total_out, _ = await build_docx_and_collect_usage(doc_name, contact_info, processed, dates[:len(processed)])
+    except Exception as e:
+        print("Üretim hatası:", traceback.format_exc()[:2000])
+        return PlainTextResponse(f"Üretim hatası: {str(e)}", status_code=500)
+
+    cost_usd = (total_in / 1_000_000.0) * RATE_IN_PER_MTOK + (total_out / 1_000_000.0) * RATE_OUT_PER_MTOK
+    cost_try = cost_usd * USD_TRY_RATE
+    ts = (datetime.datetime.now(TZ) if TZ else datetime.datetime.now()).isoformat(timespec="seconds")
+    user_key = request.client.host if request.client else "unknown"
+    try:
+        await run_in_threadpool(
+            log_usage, ts, user["id"], user_key, DEFAULT_MODEL, doc_name,
+            project_tag, plan_month, len(processed),
+            total_in, total_out, cost_usd, cost_try
+        )
+    except Exception as e:
+        print("DB log error:", e)
+
+    headers = {
+        "Content-Disposition": f'attachment; filename="{doc_name}.docx"',
+        "X-API-Cost-USD": f"{cost_usd:.6f}",
+        "X-API-Cost-TRY": f"{cost_try:.2f}",
+        "X-API-InTokens": str(total_in),
+        "X-API-OutTokens": str(total_out),
+    }
+    return StreamingResponse(
+        io.BytesIO(content),
+        media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        headers=headers
+    )
