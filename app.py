@@ -3,12 +3,11 @@ from datetime import datetime, date
 from typing import List, Optional
 
 from fastapi import FastAPI, Request, UploadFile, File, Form, Depends, HTTPException
-from fastapi.responses import HTMLResponse, RedirectResponse, StreamingResponse, Response
+from fastapi.responses import HTMLResponse, RedirectResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from starlette.middleware.sessions import SessionMiddleware
 from starlette.middleware.base import BaseHTTPMiddleware
-from starlette.datastructures import URL
 import bcrypt
 import requests
 from docx import Document
@@ -22,27 +21,38 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 TEMPLATES_DIR = os.path.join(BASE_DIR, "templates")
 STATIC_DIR = os.path.join(BASE_DIR, "static")
 
-# DB yolunu /tmp'ye alıyoruz ki free planda disksiz sorunsuz çalışsın.
-USAGE_DB_PATH = os.getenv("USAGE_DB_PATH", "/tmp/usage.db")
-DB_DIR = os.path.dirname(USAGE_DB_PATH) or BASE_DIR
-os.makedirs(DB_DIR, exist_ok=True)
+def _choose_db_path() -> str:
+    """USAGE_DB_PATH yazılamazsa /tmp/usage.db'ye düş."""
+    env_path = os.getenv("USAGE_DB_PATH", "/tmp/usage.db").strip() or "/tmp/usage.db"
+    cand_dir = os.path.dirname(env_path) or "."
+    try:
+        os.makedirs(cand_dir, exist_ok=True)
+        testfile = os.path.join(cand_dir, ".perm_test")
+        with open(testfile, "w") as f:
+            f.write("ok")
+        os.remove(testfile)
+        print(f"[INFO] Using DB at: {env_path}")
+        return env_path
+    except Exception as e:
+        fallback = "/tmp/usage.db"
+        os.makedirs("/tmp", exist_ok=True)
+        print(f"[WARN] DB path '{env_path}' not writable ({e}). Falling back to {fallback}")
+        return fallback
 
-print(f"[INFO] Using DB at: {USAGE_DB_PATH}")
+USAGE_DB_PATH = _choose_db_path()
 
 APP_NAME = os.getenv("APP_NAME", "Gemini Plan DOCX")
-# SECRET_KEY env’de yoksa çalışsın diye default veriyoruz (deploymentta ENV koyman yine de önerilir).
 SECRET_KEY = os.getenv("SECRET_KEY", "dev-" + secrets.token_urlsafe(48))
 
-# Kod içinden admin seed (sen kodda istediğini yazarsın); ENV varsa o öncelikli.
-ADMIN_CODE_USER = os.getenv("ADMIN_CODE_USER", "otelgrafikadmin")
-ADMIN_CODE_PASS = os.getenv("ADMIN_CODE_PASS", "otelgrafikpass")
-DEFAULT_USER_ROLE = "user"
+# Koddan admin seed (ENV varsa o öncelikli)
+ADMIN_CODE_USER = os.getenv("ADMIN_CODE_USER", "admin")
+ADMIN_CODE_PASS = os.getenv("ADMIN_CODE_PASS", "admin123!")
 
 # Gemini
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "").strip()
 GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
 
-# Planlama: ayın 1'inden **29’una** kadar (sen istemiştin)
+# Plan cutoff (1–29)
 PLAN_CUTOFF_DAY = int(os.getenv("PLAN_CUTOFF_DAY", "29"))
 
 # -------------------------
@@ -62,9 +72,9 @@ class SecurityHeaders(BaseHTTPMiddleware):
 
 app.add_middleware(SecurityHeaders)
 
-# Static ve templates mount
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 templates = Jinja2Templates(directory=TEMPLATES_DIR)
+templates.env.globals["now"] = datetime.now  # templates'de now() kullanıyoruz
 
 # -------------------------
 # DB
@@ -75,7 +85,7 @@ def get_db() -> sqlite3.Connection:
     except sqlite3.OperationalError as e:
         raise RuntimeError(
             f"SQLite açılamadı: {USAGE_DB_PATH} — {e}. "
-            "USAGE_DB_PATH'i /tmp/usage.db yapın veya mount path yazılabilir olmalı."
+            "Free planda /tmp yazılabilir; env'i kaldır ya da /tmp/usage.db yap."
         )
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA journal_mode=WAL;")
@@ -136,6 +146,7 @@ def on_startup():
 # -------------------------
 # AUTH HELPERS
 # -------------------------
+from fastapi import HTTPException
 def get_current_user(request: Request):
     user = request.session.get("user")
     role = request.session.get("role")
@@ -204,7 +215,6 @@ def dashboard(request: Request):
         return RedirectResponse("/login?next=/dashboard", status_code=303)
     user = request.session["user"]; role = request.session["role"]
 
-    # Kişiye özel log görünürlüğü: admin her şeyi, employee sadece kendi logunu görür.
     conn = get_db()
     cur = conn.cursor()
     if role == "admin":
@@ -215,18 +225,10 @@ def dashboard(request: Request):
     conn.close()
 
     months = [
-        {"value": 1, "label": "Ocak"},
-        {"value": 2, "label": "Şubat"},
-        {"value": 3, "label": "Mart"},
-        {"value": 4, "label": "Nisan"},
-        {"value": 5, "label": "Mayıs"},
-        {"value": 6, "label": "Haziran"},
-        {"value": 7, "label": "Temmuz"},
-        {"value": 8, "label": "Ağustos"},
-        {"value": 9, "label": "Eylül"},
-        {"value": 10, "label": "Ekim"},
-        {"value": 11, "label": "Kasım"},
-        {"value": 12, "label": "Aralık"},
+        {"value": 1, "label": "Ocak"},{"value": 2, "label": "Şubat"},{"value": 3, "label": "Mart"},
+        {"value": 4, "label": "Nisan"},{"value": 5, "label": "Mayıs"},{"value": 6, "label": "Haziran"},
+        {"value": 7, "label": "Temmuz"},{"value": 8, "label": "Ağustos"},{"value": 9, "label": "Eylül"},
+        {"value": 10, "label": "Ekim"},{"value": 11, "label": "Kasım"},{"value": 12, "label": "Aralık"},
     ]
     years = list(range(2024, 2031))
     return templates.TemplateResponse("dashboard.html", {
@@ -282,25 +284,19 @@ def users_delete(request: Request, user_id: int = Form(...)):
 # GEMINI: Caption & Hashtag
 # -------------------------
 def gemini_caption_and_hashtags_for_image(img_bytes: bytes) -> dict:
-    """
-    GEMINI_API_KEY yoksa basit fallback metin üretir.
-    Varsa REST ile Gemini 2.5 Flash'a çağrı dener (başarısız olursa fallback).
-    """
     fallback = {
         "caption": "Tatil ruhunu yansıtan ferah bir kare. Konfor ve şıklık bir arada.",
         "hashtags": ["#tatilbudur", "#oteltavsiyesi", "#erkenrezervasyon"]
     }
     if not GEMINI_API_KEY:
         return fallback
-
     try:
-        # Basit base64 encode; birçok REST örneği bu şekilde multi-part prompt kabul eder.
         b64 = base64.b64encode(img_bytes).decode("utf-8")
         payload = {
             "contents": [{
                 "role": "user",
                 "parts": [
-                    {"text": "Bu görsel için Türkçe, pazarlama odaklı 1 açıklama ve 5 otel/seyahat odaklı hashtag üret. 'tatilbudur' ve otel lokasyonu temalı olsun. JSON ver."},
+                    {"text": "Bu görsel için Türkçe, pazarlama odaklı 1 açıklama ve 5 otel/seyahat hashtag üret. 'tatilbudur' ve lokasyon temalı olsun. JSON ver: {\"caption\":\"...\",\"hashtags\":[\"#...\"]}"},
                     {"inline_data": {"mime_type": "image/jpeg", "data": b64}}
                 ]
             }]
@@ -309,48 +305,37 @@ def gemini_caption_and_hashtags_for_image(img_bytes: bytes) -> dict:
         r = requests.post(url, json=payload, timeout=30)
         r.raise_for_status()
         data = r.json()
-        # Basit parse
         text = ""
         try:
             text = data["candidates"][0]["content"]["parts"][0]["text"]
         except Exception:
             text = ""
-        # Metinde JSON varsa çek
         try:
-            # JSON parçayı bulma (çok basit yaklaşım)
-            start = text.find("{")
-            end = text.rfind("}")
-            if start != -1 and end != -1 and end > start:
-                obj = json.loads(text[start:end+1])
+            s = text.find("{"); e = text.rfind("}")
+            if s != -1 and e != -1 and e > s:
+                obj = json.loads(text[s:e+1])
                 caption = obj.get("caption") or obj.get("aciklama") or fallback["caption"]
-                hashtags = obj.get("hashtags") or obj.get("etiketler") or fallback["hashtags"]
-                if isinstance(hashtags, str):
-                    hashtags = [h.strip() for h in hashtags.split() if h.strip().startswith("#")]
-                return {"caption": caption, "hashtags": hashtags[:5] or fallback["hashtags"]}
+                tags = obj.get("hashtags") or obj.get("etiketler") or fallback["hashtags"]
+                if isinstance(tags, str):
+                    tags = [h.strip() for h in tags.split() if h.strip().startswith("#")]
+                return {"caption": caption, "hashtags": tags[:5] or fallback["hashtags"]}
         except Exception:
             pass
-
-        # JSON yoksa metinden yakala
         if text:
             lines = [l.strip() for l in text.splitlines() if l.strip()]
             cap = lines[0][:220] if lines else fallback["caption"]
-            tags = [w for w in " ".join(lines[1:]).split() if w.startswith("#")]
-            if not tags:
-                tags = fallback["hashtags"]
+            tags = [w for w in " ".join(lines[1:]).split() if w.startswith("#")] or fallback["hashtags"]
             return {"caption": cap, "hashtags": tags[:5]}
     except Exception as e:
         print("[WARN] Gemini fallback:", e)
-
     return fallback
 
 # -------------------------
 # PLAN TARİHLERİ
 # -------------------------
 def build_schedule(year: int, month: int, step_days: int) -> List[date]:
-    # 1'den başla, 29'unda bitir (isteğin doğrultusunda). Ay 29'dan kısa ise min al.
     last = min(PLAN_CUTOFF_DAY, calendar.monthrange(year, month)[1])
-    out = []
-    d = 1
+    out, d = [], 1
     while d <= last:
         out.append(date(year, month, d))
         d += max(step_days, 1)
@@ -370,13 +355,8 @@ def build_docx(hotel_tag: str, schedule: List[date], images: List[bytes]) -> byt
     for idx, img_raw in enumerate(images):
         when = schedule[idx % len(schedule)]
         doc.add_heading(f"{hotel_tag} – Paylaşım Tarihi: {when.strftime('%d.%m.%Y')}", level=2)
-
-        # Gemini içeriği
         gen = gemini_caption_and_hashtags_for_image(img_raw)
-        caption = gen["caption"]
-        hashtags = " ".join(gen["hashtags"])
-
-        # Görseli ekle
+        caption = gen["caption"]; hashtags = " ".join(gen["hashtags"])
         jpeg = image_to_jpeg_bytes(img_raw)
         img_stream = io.BytesIO(jpeg)
         doc.add_paragraph(caption)
@@ -384,8 +364,7 @@ def build_docx(hotel_tag: str, schedule: List[date], images: List[bytes]) -> byt
         doc.add_picture(img_stream, width=Inches(5.8))
         doc.add_page_break()
     buf = io.BytesIO()
-    doc.save(buf)
-    buf.seek(0)
+    doc.save(buf); buf.seek(0)
     return buf.read()
 
 # -------------------------
@@ -401,29 +380,19 @@ async def generate(
     files: List[UploadFile] = File(...)
 ):
     user, role = get_current_user(request)
-    # Görselleri oku
-    images = []
-    for f in files:
-        content = await f.read()
-        images.append(content)
-
-    # Takvimi kur
+    images = [await f.read() for f in files]
     schedule = build_schedule(year, month, every_n_days)
     if not schedule:
-        raise HTTPException(400, "Plan boş: ay/step ayarlarını kontrol et")
-
-    # DOCX üret
+        raise HTTPException(400, "Plan boş: ay/step ayarları.")
     docx_bytes = build_docx(hotel_tag.strip() or "Plan", schedule, images)
 
-    # Logla (user rol izolasyonu dashboard’da)
     conn = get_db()
     cur = conn.cursor()
     cur.execute("""
         INSERT INTO logs (username, role, hotel_tag, month, year, images_count, created_at)
         VALUES (?, ?, ?, ?, ?, ?, ?)
     """, (user, role, hotel_tag.strip(), month, year, len(images), datetime.utcnow().isoformat()))
-    conn.commit()
-    conn.close()
+    conn.commit(); conn.close()
 
     filename = f"{hotel_tag}_{year}-{month:02d}_plan.docx".replace(" ", "_")
     return StreamingResponse(
