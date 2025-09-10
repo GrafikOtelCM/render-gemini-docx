@@ -2,33 +2,41 @@
 <html lang="tr">
 <head>
   <meta charset="utf-8" />
-  <title>{{ app_name }}</title>
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <link href="/static/styles.css" rel="stylesheet" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>{{ title or "Otel Planlama Stüdyosu" }}</title>
+  <link rel="stylesheet" href="/static/styles.css" />
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🏨</text></svg>">
 </head>
 <body>
-  <nav class="nav">
+  <header class="nav">
     <div class="nav-left">
-      <a class="brand" href="/">🏨 {{ app_name }}</a>
+      <a class="brand" href="/">🏨 {{ title or "Otel Planlama Stüdyosu" }}</a>
+      {% if user %}
+        <a class="nav-link {% if request.url.path == '/' %}active{% endif %}" href="/">Planlama</a>
+        {% if user.role == 'admin' %}
+          <a class="nav-link {% if request.url.path.startswith('/admin') %}active{% endif %}" href="/admin">Admin</a>
+        {% endif %}
+      {% endif %}
     </div>
     <div class="nav-right">
       {% if user %}
-        <a href="/" class="nav-link">Planlama</a>
-        {% if is_admin %}
-          <a href="/admin" class="nav-link">Admin</a>
-        {% endif %}
-        <form class="inline" method="post" action="/logout">
+        <span class="user-chip">👤 {{ user.username }}{% if user.role=='admin' %}<span class="role">admin</span>{% endif %}</span>
+        <form method="post" action="/logout">
           <input type="hidden" name="csrf_token" value="{{ csrf_token }}" />
-          <button class="btn-secondary" type="submit">Çıkış ({{ user.username }})</button>
+          <button class="btn btn-ghost" type="submit" aria-label="Çıkış">Çıkış</button>
         </form>
       {% else %}
-        <a href="/login" class="nav-link">Giriş</a>
+        <a class="btn btn-ghost" href="/login">Giriş</a>
       {% endif %}
     </div>
-  </nav>
+  </header>
 
-  <main class="container">
+  <main class="page">
     {% block content %}{% endblock %}
   </main>
+
+  <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
+
+  <script src="/static/app.js" defer></script>
 </body>
 </html>
