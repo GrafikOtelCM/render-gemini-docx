@@ -1,0 +1,34 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+  <meta charset="utf-8" />
+  <title>{{ title or "Uygulama" }}</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <link href="/static/styles.css" rel="stylesheet" />
+</head>
+<body>
+  <nav class="navbar">
+    <div class="nav-left">
+      <a class="brand" href="/">🏨 {{ title or "Otel Planlama Stüdyosu" }}</a>
+    </div>
+    <div class="nav-right">
+      {% if user %}
+        <a href="/" class="nav-link">Planlama</a>
+        {% if user.role == "admin" %}
+          <a href="/admin" class="nav-link">Admin</a>
+        {% endif %}
+        <form method="post" action="/logout" class="inline">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+          <button type="submit" class="btn btn-light">Çıkış ({{ user.username }})</button>
+        </form>
+      {% else %}
+        <a href="/login" class="btn">Giriş</a>
+      {% endif %}
+    </div>
+  </nav>
+  <main class="container">
+    {% block content %}{% endblock %}
+  </main>
+  <script src="/static/app.js"></script>
+</body>
+</html>
