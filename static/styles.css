@@ -111,4 +111,19 @@ textarea.input{resize:vertical}
 .thumb img{width:100%; height:100%; object-fit:cover; display:block}
 .thumb .x{
   position:absolute; top:6px; right:6px; background:rgba(0,0,0,.5);
-  border:1px solid var(--border); color:#fff; width
+  border:1px solid var(--border); color:#fff; width:22px; height:22px; border-radius:8px;
+  display:grid; place-items:center; font-size:12px; cursor:pointer;
+}
+
+/* MISC */
+.alert{padding:10px 12px; border:1px solid #f59e0b; background:rgba(245,158,11,.1); color:#f8dfa9; border-radius:10px; margin-bottom:6px}
+.muted{color:var(--muted)}
+.actions{display:flex; gap:10px; align-items:center}
+.toast{
+  position:fixed; bottom:18px; right:18px; background:#0a1224; border:1px solid var(--border);
+  padding:12px 14px; border-radius:12px; box-shadow:var(--shadow);
+}
+@media (max-width: 720px){
+  .form-grid{grid-template-columns:1fr}
+  .col-span-2{grid-column:auto}
+}
