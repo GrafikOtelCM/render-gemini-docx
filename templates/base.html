@@ -1,34 +1,30 @@
 <!doctype html>
 <html lang="tr">
 <head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta charset="utf-8" />
   <title>{{ app_name }}</title>
-  <link rel="stylesheet" href="/static/styles.css">
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <link rel="stylesheet" href="/static/styles.css" />
 </head>
 <body>
-  <header class="topbar">
-    <div class="container" style="display:flex;justify-content:space-between;align-items:center;">
-      <strong>{{ app_name }}</strong>
-      <nav>
-        {% if user %}
-          <a class="navlink" href="/">Oluştur</a> •
-          <a class="navlink" href="/dashboard">Dashboard</a> •
-          <span class="muted">{{ user.username }} ({{ user.role }})</span> •
-          <a class="navlink" href="/logout">Çıkış</a>
-        {% else %}
-          <a class="navlink" href="/login">Giriş</a>
-        {% endif %}
-      </nav>
-    </div>
-  </header>
-  <main class="container">
-    {% block content %}{% endblock %}
-  </main>
-  <footer class="footer">
-    <div class="container">
-      <small>© {{ app_name }} • Çok kullanıcılı, rol tabanlı erişim + CSP/CSRF korumalı.</small>
-    </div>
-  </footer>
+<header class="topbar">
+  <div class="brand">{{ app_name }}</div>
+  <nav>
+    {% if request.session.get("uid") %}
+      <a href="/dashboard">Dashboard</a>
+      {% if request.session.get("role") == "admin" %}
+        <a href="/users">Kullanıcılar</a>
+      {% endif %}
+      <a href="/logs/export">Log İndir</a>
+      <a class="logout" href="/logout">Çıkış</a>
+    {% endif %}
+  </nav>
+</header>
+<main class="container">
+  {% block content %}{% endblock %}
+</main>
+<footer class="footer">
+  <small>© {{ now().year }} TatilBudur · İstanbul</small>
+</footer>
 </body>
 </html>
