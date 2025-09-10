@@ -1,0 +1,56 @@
+{% extends "base.html" %}
+{% block content %}
+<h2>Admin Dashboard</h2>
+
+<div class="grid cols-2 gap">
+  <div class="card">
+    <h3>Kullanıcı Oluştur</h3>
+    <form method="post" action="/admin/users/create" class="grid gap">
+      <input type="hidden" name="csrf_token" value="{{ get_csrf_token(request) }}">
+      <label>
+        <span>Kullanıcı Adı</span>
+        <input name="new_username" required>
+      </label>
+      <label>
+        <span>Şifre</span>
+        <input type="password" name="new_password" required>
+      </label>
+      <label>
+        <span>Rol</span>
+        <select name="new_role">
+          <option value="staff" selected>Staff</option>
+          <option value="admin">Admin</option>
+        </select>
+      </label>
+      <button class="btn primary">Ekle</button>
+    </form>
+  </div>
+
+  <div class="card">
+    <h3>Kullanıcı Listesi</h3>
+    <table class="table">
+      <thead><tr><th>ID</th><th>Kullanıcı</th><th>Rol</th><th></th></tr></thead>
+      <tbody>
+        {% for u in users %}
+        <tr>
+          <td>{{ u.id }}</td>
+          <td>{{ u.username }}</td>
+          <td><span class="badge">{{ u.role }}</span></td>
+          <td>
+            {% if u.username != request.session['user']['username'] %}
+            <form method="post" action="/admin/users/delete" onsubmit="return confirm('Silinsin mi?')" class="inline">
+              <input type="hidden" name="csrf_token" value="{{ get_csrf_token(request) }}">
+              <input type="hidden" name="user_id" value="{{ u.id }}">
+              <button class="btn danger">Sil</button>
+            </form>
+            {% else %}
+            <span class="muted">Kendiniz</span>
+            {% endif %}
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endblock %}
