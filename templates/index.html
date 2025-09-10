@@ -1,74 +1,52 @@
-{% extends "base.html" %}
-{% block content %}
-<h1>Görselleri yükle → DOCX planını indir</h1>
-<p class="muted">
-  Ay ve aralığı seç; sistem <b>ayın 1’inden 29’una</b> kadar güncel takvimle tarihleri üretir,
-  her sayfanın <b>üstüne paylaşım tarihi</b> yazılır. Her kullanıcı sadece kendi dashboard’unu görür.
-</p>
+<!doctype html>
+<html lang="tr">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<link rel="stylesheet" href="/static/styles.css">
+<title>Plan Oluştur</title>
+</head>
+<body class="container">
+  <header class="topbar">
+    <div class="brand">{{ app_name }}</div>
+    <nav><a href="/dashboard">Dashboard</a> • <a href="/logout">Çıkış</a></nav>
+  </header>
 
-<form id="planForm" action="/generate" method="post" enctype="multipart/form-data" class="card">
-  <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+  <div class="card">
+    <h1>DOCX Plan Oluştur</h1>
+    <form id="genForm" method="post" action="/generate" enctype="multipart/form-data">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
 
-  <div class="grid2">
-    <div class="field">
-      <label>Plan Ayı</label>
-      <input type="month" name="plan_month" id="plan_month" required value="{{ default_month }}">
-    </div>
-    <div class="field">
-      <label>Kaç günde bir?</label>
-      <input type="number" name="interval_days" id="interval_days" min="1" value="1" required>
-    </div>
-  </div>
-
-  <div class="field">
-    <label>Proje/Otel etiketi</label>
-    <input type="text" name="project_tag" id="project_tag" placeholder="Örn: Martı_Prime_Ekim">
-    <small class="muted">Caption cache bu etiketle izole edilir; dashboard’da görünür.</small>
-  </div>
-
-  <div class="field">
-    <label>Doküman adı</label>
-    <input type="text" name="doc_name" id="doc_name" required
-           value="Instagram_Plani_{% if suggested_name %}{{ suggested_name }}{% endif %}">
-  </div>
-
-  <div class="field">
-    <label>İletişim bilgisi</label>
-    <input type="text" name="contact_info" id="contact_info" required
-           value="📞 0 (242) 000 00 00   🌐 https://example.com">
-  </div>
-
-  <div class="field">
-    <label>Görseller (çoklu seçim, max 10)</label>
-
-    <div id="dropzone" class="dropzone" tabindex="0">
-      <div class="dz-inner">
-        <div class="dz-icon">🖼️</div>
-        <div class="dz-text">
-          <b>Görselleri sürükleyip bırak</b> veya
-          <label for="fileInput" class="linklike">Dosyaları Seç</label>
+      <div class="grid">
+        <div>
+          <label>Doküman Adı</label>
+          <input name="doc_name" value="{{ suggested_name }}" required>
         </div>
-        <div class="dz-hint">PNG, JPG/JPEG, WebP. Yüklemeden önce 1280px’e sıkıştırılır.</div>
+        <div>
+          <label>Proje/Otel Etiketi</label>
+          <input name="project_tag" placeholder="Martı Prime, vb.">
+        </div>
       </div>
-      <input id="fileInput" type="file" name="files" accept="image/*" multiple hidden>
-    </div>
 
-    <div class="dz-status">
-      <span id="fileCount">0/10 görsel seçildi</span>
-      <span id="totalSize" class="muted">Toplam: 0 MB</span>
-    </div>
+      <div class="grid">
+        <div>
+          <label>Plan Ayı</label>
+          <input type="month" name="plan_month" value="{{ default_month }}" required>
+        </div>
+        <div>
+          <label>Kaç günde bir paylaşım?</label>
+          <input type="number" name="interval_days" min="1" value="1" required>
+        </div>
+      </div>
 
-    <div id="scheduleInfo" class="muted" style="margin-top:6px;"></div>
-    <div id="previewGrid" class="file-grid"></div>
-    <div id="errorBox" class="alert hidden"></div>
+      <label>İletişim Bilgisi (caption altına eklenecek)</label>
+      <textarea name="contact_info" rows="3" placeholder="Tel, web, konum..."></textarea>
+
+      <label>Görseller (en fazla 10)</label>
+      <input type="file" name="files" accept="image/*" multiple required>
+      <p class="hint">Seçtiğiniz sırayla tarihlere yerleştirilecektir (1–29 arası).</p>
+
+      <button class="btn primary" type="submit">Oluştur & İndir</button>
+    </form>
   </div>
-
-  <div class="form-actions">
-    <button id="submitBtn" class="btn" type="submit" disabled>Oluştur ve indir (.docx)</button>
-    <button id="clearBtn" class="btn btn-secondary" type="button">Temizle</button>
-  </div>
-</form>
-
-<!-- Tüm JS dış dosyada; CSP 'script-src self' -->
-<script src="/static/app.js" defer></script>
-{% endblock %}
+</body>
+</html>
