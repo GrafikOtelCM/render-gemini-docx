@@ -1,95 +1,65 @@
 {% extends "base.html" %}
 {% block content %}
-<div class="grid">
-  <section class="card">
-    <h2>Plan + DOCX Oluştur</h2>
-    <form id="genForm">
-      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-      <label>Otel Adı</label>
-      <input name="hotel" placeholder="Örn: Martı Prime" required />
+<section class="grid">
+  <div class="card">
+    <h2>Plan Oluştur</h2>
+    <form class="form" action="/generate" method="post" enctype="multipart/form-data">
+      <label>Otel / Plan Etiketi</label>
+      <input name="hotel_tag" placeholder="Örn: Martı Prime" required>
 
       <div class="row">
         <div>
           <label>Yıl</label>
-          <input type="number" name="year" value="{{ now().year }}" min="2024" max="{{ now().year + 2 }}" required />
+          <select name="year">
+            {% for y in years %}
+              <option value="{{ y }}" {% if y == now().year %}selected{% endif %}>{{ y }}</option>
+            {% endfor %}
+          </select>
         </div>
         <div>
           <label>Ay</label>
-          <select name="month" required>
-            {% for m in range(1,13) %}
-              <option value="{{ m }}" {% if m==now().month %}selected{% endif %}>{{ "{:02d}".format(m) }}</option>
+          <select name="month">
+            {% for m in months %}
+              <option value="{{ m.value }}" {% if m.value == now().month %}selected{% endif %}>{{ m.label }}</option>
             {% endfor %}
           </select>
         </div>
         <div>
           <label>Kaç günde bir?</label>
-          <input type="number" name="every_n_days" value="3" min="1" max="10" required />
+          <input type="number" name="every_n_days" min="1" value="3" required>
         </div>
       </div>
 
-      <label>Görseller (çoklu seçin)</label>
-      <input id="files" type="file" name="files" multiple accept="image/*" required />
-      <div id="fileCount" class="muted">Seçilen: 0</div>
+      <label>Görseller (çoklu seçim)</label>
+      <input type="file" name="files" accept="image/*" multiple required>
+      <p class="help">Her görsel için Gemini 2.5 Flash ile benzersiz açıklama ve 5 hashtag üretmeye çalışır (API key varsa).</p>
 
-      <div class="actions">
-        <button type="button" id="previewBtn">Tarihleri Önizle</button>
-        <button type="submit" id="genBtn">Oluştur & İndir</button>
-      </div>
+      <button type="submit" class="btn primary">Oluştur ve İndir</button>
     </form>
+  </div>
 
-    <div id="preview" class="preview"></div>
-    <div id="result" class="result"></div>
-  </section>
-
-  <section class="card">
+  <div class="card">
     <h2>Son İşlemler ({{ role }})</h2>
     <table class="table">
-      <thead><tr>
-        <th>Zaman</th><th>Otel</th><th>Ay</th><th>Adet</th><th>TRY</th><th>Dosya</th>
-      </tr></thead>
+      <thead>
+        <tr>
+          <th>Zaman</th><th>Kullanıcı</th><th>Etiket</th><th>Ay/Yıl</th><th>Görsel</th>
+        </tr>
+      </thead>
       <tbody>
-        {% for l in logs %}
+        {% for r in logs %}
           <tr>
-            <td>{{ l["created_at"] }}</td>
-            <td>{{ l["hotel"] }}</td>
-            <td>{{ "{:02d}".format(l["month"]) }}.{{ l["year"] }}</td>
-            <td>{{ l["images_count"] }}</td>
-            <td>{{ "%.2f"|format(l["cost_try"]) }} ₺</td>
-            <td><a href="/download/{{ l['file_name'] }}">indir</a></td>
+            <td>{{ r.created_at }}</td>
+            <td>{{ r.username }}</td>
+            <td>{{ r.hotel_tag }}</td>
+            <td>{{ "%02d/%d"|format(r.month, r.year) }}</td>
+            <td>{{ r.images_count }}</td>
           </tr>
+        {% else %}
+          <tr><td colspan="5" class="muted">Kayıt yok.</td></tr>
         {% endfor %}
       </tbody>
     </table>
-  </section>
-</div>
-
-<script>
-const filesEl = document.getElementById('files');
-const fileCountEl = document.getElementById('fileCount');
-filesEl.addEventListener('change', ()=>{ fileCountEl.textContent = `Seçilen: ${filesEl.files.length}`; });
-
-document.getElementById('previewBtn').addEventListener('click', async ()=>{
-  const form = new FormData(document.getElementById('genForm'));
-  const count = filesEl.files.length || 10;
-  const year = form.get('year'); const month = form.get('month'); const every = form.get('every_n_days');
-  const r = await fetch(`/plan_dates?year=${year}&month=${month}&every=${every}&count=${count}`);
-  const j = await r.json();
-  document.getElementById('preview').innerHTML = `<b>Plan Tarihleri:</b><br>${j.dates.join(' · ')}`;
-});
-
-document.getElementById('genForm').addEventListener('submit', async (e)=>{
-  e.preventDefault();
-  const form = new FormData(document.getElementById('genForm'));
-  const res = await fetch('/generate', { method: 'POST', body: form });
-  const j = await res.json();
-  const resultEl = document.getElementById('result');
-  if(!j.ok){ resultEl.innerHTML = `<div class="alert">${j.error||'Hata'}</div>`; return; }
-  resultEl.innerHTML = `
-    <div class="success">DOCX hazır: <a href="${j.file}">indir</a></div>
-    <div class="muted">Maliyet: ${j.usd.toFixed(6)} USD ≈ ${(j.try_).toFixed(2)} ₺ · Tokens [in:${j.token_in}, out:${j.token_out}]</div>
-  `;
-  // otomatik indir
-  window.location.href = j.file;
-});
-</script>
+  </div>
+</section>
 {% endblock %}
