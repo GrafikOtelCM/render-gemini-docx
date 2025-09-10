@@ -1,73 +1,91 @@
-(function(){
-  const dz = document.getElementById("dropzone");
-  const fi = document.getElementById("file-input");
+// Basit sürükle-bırak ve küçük önizleme
+(function () {
+  const fileInput = document.getElementById("images");
   const thumbs = document.getElementById("thumbs");
-  const form = document.getElementById("upload-form");
-  const btn = document.getElementById("btn-upload");
+  const form = document.getElementById("plan-form");
+  const result = document.getElementById("result");
 
-  let files = [];
+  if (fileInput && thumbs) {
+    const renderThumbs = (files) => {
+      thumbs.innerHTML = "";
+      [...files].forEach((f) => {
+        if (!f.type.startsWith("image/")) return;
+        const url = URL.createObjectURL(f);
+        const wrap = document.createElement("div");
+        wrap.className = "thumb";
+        const img = document.createElement("img");
+        img.src = url;
+        img.onload = () => URL.revokeObjectURL(url);
+        wrap.appendChild(img);
+        const cap = document.createElement("div");
+        cap.className = "thumb-cap";
+        cap.textContent = f.name;
+        wrap.appendChild(cap);
+        thumbs.appendChild(wrap);
+      });
+    };
 
-  function renderThumbs(list){
-    thumbs.innerHTML = "";
-    list.forEach(file => {
-      const div = document.createElement("div");
-      div.className = "thumb";
-      const img = document.createElement("img");
-      div.appendChild(img);
-      thumbs.appendChild(div);
-
-      const reader = new FileReader();
-      reader.onload = e => { img.src = e.target.result; };
-      reader.readAsDataURL(file);
+    fileInput.addEventListener("change", (e) => {
+      renderThumbs(e.target.files || []);
     });
+
+    // Drop area (input label'ına bırakılabilir)
+    const uploader = fileInput.closest(".uploader");
+    if (uploader) {
+      ["dragenter", "dragover"].forEach((ev) =>
+        uploader.addEventListener(ev, (e) => {
+          e.preventDefault(); e.stopPropagation();
+          uploader.classList.add("dragging");
+        })
+      );
+      ["dragleave", "drop"].forEach((ev) =>
+        uploader.addEventListener(ev, (e) => {
+          e.preventDefault(); e.stopPropagation();
+          uploader.classList.remove("dragging");
+        })
+      );
+      uploader.addEventListener("drop", (e) => {
+        const dt = e.dataTransfer;
+        if (!dt || !dt.files) return;
+        fileInput.files = dt.files;
+        renderThumbs(dt.files);
+      });
+    }
   }
 
-  dz.addEventListener("click", () => fi.click());
+  // AJAX submit (JSON cevap göster)
+  if (form && result) {
+    form.addEventListener("submit", async (e) => {
+      e.preventDefault();
+      const fd = new FormData(form);
+      result.style.display = "block";
+      result.textContent = "Oluşturuluyor…";
 
-  dz.addEventListener("dragover", (e) => {
-    e.preventDefault();
-    dz.classList.add("dragover");
-  });
-  dz.addEventListener("dragleave", () => dz.classList.remove("dragover"));
-  dz.addEventListener("drop", (e) => {
-    e.preventDefault();
-    dz.classList.remove("dragover");
-    const dropped = Array.from(e.dataTransfer.files || []);
-    if (dropped.length){
-      files = files.concat(dropped);
-      renderThumbs(files);
-    }
-  });
-
-  fi.addEventListener("change", () => {
-    const picked = Array.from(fi.files || []);
-    if (picked.length){
-      files = files.concat(picked);
-      renderThumbs(files);
-    }
-  });
-
-  form.addEventListener("submit", async (e) => {
-    e.preventDefault();
-    if (!files.length){ alert("Önce görsel ekleyin."); return; }
-    btn.disabled = true;
-
-    const data = new FormData();
-    data.append("csrf_token", window.CSRF_TOKEN || "");
-    files.forEach(f => data.append("files", f));
-
-    try{
-      const res = await fetch("/upload", { method:"POST", body:data });
-      const js = await res.json();
-      if (!js.ok) throw new Error("Yükleme başarısız");
-      alert(`Yüklendi: ${js.saved.length} dosya`);
-      files = [];
-      renderThumbs(files);
-    }catch(err){
-      console.error(err);
-      alert("Hata: " + (err.message || "bilinmeyen"));
-    }finally{
-      btn.disabled = false;
-    }
-  });
+      try {
+        const resp = await fetch(form.action, {
+          method: "POST",
+          body: fd,
+        });
+        const data = await resp.json().catch(() => ({}));
+        if (!resp.ok || !data.ok) {
+          const msg = (data && (data.error || data.detail)) || ("Hata: " + resp.status);
+          result.className = "card alert-error";
+          result.textContent = msg;
+          return;
+        }
+        result.className = "card";
+        result.innerHTML = `
+          <b>Plan hazır.</b><br>
+          Dosya adı: ${data.received.file_name}<br>
+          Ay: ${data.received.month}<br>
+          Periyot (gün): ${data.received.every_days}<br>
+          İletişim: ${data.received.hotel_contact || "-"}<br>
+          Görsel sayısı: ${data.received.images_count}
+        `;
+      } catch (err) {
+        result.className = "card alert-error";
+        result.textContent = "Beklenmeyen bir hata oluştu.";
+      }
+    });
+  }
 })();
