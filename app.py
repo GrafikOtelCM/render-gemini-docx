@@ -40,7 +40,7 @@ DEFAULT_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "YOUR_API_KEY_HERE")
 SECRET_KEY = os.getenv("SECRET_KEY", "CHANGE_THIS_SECRET")
 
-# Ücretler (USD / 1M token) - interaktif
+# Ücretler (USD / 1M token)
 RATE_IN_PER_MTOK  = float(os.getenv("RATE_IN_PER_MTOK",  "0.30"))
 RATE_OUT_PER_MTOK = float(os.getenv("RATE_OUT_PER_MTOK", "2.50"))
 USD_TRY_RATE = float(os.getenv("USD_TRY_RATE", "41.2"))
@@ -59,6 +59,12 @@ RATE_LIMIT_MAX = int(os.getenv("RATE_LIMIT_MAX", "12"))
 
 BANNED_WORDS_RE = re.compile(r"(kaçış|kaçamak|kraliyet)", re.IGNORECASE)
 DB_PATH = os.getenv("USAGE_DB_PATH", "usage.db")
+
+# ========= Admin'i koddan belirle (burayı kendine göre düzenle) =========
+ADMIN_CODE_USER = "efendi.admin"        # <-- KENDİ ADMIN ADIN
+ADMIN_CODE_PASS = "SikiBirParola!2025"  # <-- KENDİ ADMIN PAROLAN
+# Var olan admin’i her açılışta BU parola ile güncellemek ister misin?
+ADMIN_FORCE_SYNC = False  # True yaparsan mevcut admin parolası da bu değere set edilir.
 
 # ========= FastAPI & Middleware =========
 app = FastAPI(title=APP_NAME)
@@ -97,6 +103,7 @@ def ensure_default_templates():
     login_html = TEMPLATES_DIR / "login.html"
     index_html = TEMPLATES_DIR / "index.html"
     dashboard_html = TEMPLATES_DIR / "dashboard.html"
+    admin_users_html = TEMPLATES_DIR / "admin_users.html"
 
     if not login_html.exists():
         login_html.write_text("""<!doctype html>
@@ -134,7 +141,11 @@ def ensure_default_templates():
 <body class="container">
   <header class="topbar">
     <div class="brand">{{ app_name }}</div>
-    <nav><a href="/dashboard">Dashboard</a> • <a href="/logout">Çıkış</a></nav>
+    <nav>
+      <a href="/dashboard">Dashboard</a>
+      {% if user and user.role == 'admin' %} • <a href="/admin/users">Kullanıcılar</a>{% endif %}
+      • <a href="/logout">Çıkış</a>
+    </nav>
   </header>
 
   <div class="card">
@@ -188,7 +199,11 @@ def ensure_default_templates():
 <body class="container">
   <header class="topbar">
     <div class="brand">Dashboard</div>
-    <nav><a href="/">Plan Oluştur</a> • <a href="/logout">Çıkış</a></nav>
+    <nav>
+      <a href="/">Plan Oluştur</a>
+      {% if user and user.role == 'admin' %} • <a href="/admin/users">Kullanıcılar</a>{% endif %}
+      • <a href="/logout">Çıkış</a>
+    </nav>
   </header>
 
   <div class="card">
@@ -228,30 +243,95 @@ def ensure_default_templates():
       </table>
     </div>
   </div>
+</body>
+</html>""", encoding="utf-8")
 
-  {% if user.role == 'admin' %}
+    if not admin_users_html.exists():
+        admin_users_html.write_text("""<!doctype html>
+<html lang="tr">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<link rel="stylesheet" href="/static/styles.css">
+<title>Kullanıcı Yönetimi</title>
+</head>
+<body class="container">
+  <header class="topbar">
+    <div class="brand">Kullanıcı Yönetimi</div>
+    <nav>
+      <a href="/">Plan Oluştur</a> • <a href="/dashboard">Dashboard</a> • <a href="/logout">Çıkış</a>
+    </nav>
+  </header>
+
+  {% if flash %}<div class="card"><div class="alert">{{ flash }}</div></div>{% endif %}
+
   <div class="card">
-    <h2>Log Temizleme (Yalnızca Admin)</h2>
-    <form method="post" action="/admin/clear_logs">
+    <h2>Yeni Kullanıcı Oluştur</h2>
+    <form method="post" action="/admin/users/create">
       <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-      <label>Şu kadar günden eski kayıtları sil:</label>
-      <input type="number" name="older_than_days" min="1" placeholder="örn. 30">
-      <button class="btn danger" type="submit">Temizle</button>
+      <div class="grid">
+        <div>
+          <label>Kullanıcı Adı</label>
+          <input name="username" required>
+        </div>
+        <div>
+          <label>Parola</label>
+          <input name="password" required type="password">
+        </div>
+      </div>
+      <div class="grid">
+        <div>
+          <label>Rol</label>
+          <select name="role" required>
+            <option value="staff">staff</option>
+            <option value="admin">admin</option>
+          </select>
+        </div>
+      </div>
+      <button class="btn primary" type="submit">Oluştur</button>
     </form>
   </div>
-  {% endif %}
+
+  <div class="card">
+    <h2>Mevcut Kullanıcılar</h2>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>ID</th><th>Kullanıcı</th><th>Rol</th><th>İşlemler</th></tr></thead>
+        <tbody>
+          {% for u in users %}
+          <tr>
+            <td>{{ u.id }}</td>
+            <td>{{ u.username }}</td>
+            <td>{{ u.role }}</td>
+            <td>
+              <form method="post" action="/admin/users/reset_password" style="display:inline">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                <input type="hidden" name="user_id" value="{{ u.id }}">
+                <input type="password" name="new_password" placeholder="Yeni parola" required>
+                <button class="btn">Parola Sıfırla</button>
+              </form>
+              <form method="post" action="/admin/users/delete" style="display:inline" onsubmit="return confirm('Silinsin mi?');">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                <input type="hidden" name="user_id" value="{{ u.id }}">
+                <button class="btn danger" {% if u.id == me.id %}disabled title="Kendini silemezsin"{% endif %}>Sil</button>
+              </form>
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    <p class="hint">Son admin’i silmeye izin verilmez. Admin sayısı ≥ 1 kalmalı.</p>
+  </div>
 </body>
 </html>""", encoding="utf-8")
 
 # ========= DB Yardımcıları =========
 def get_db():
-    # timeout=30: kilitliyse 30 sn bekle; busy_timeout ayrıca 5 sn bekler
     conn = sqlite3.connect(DB_PATH, check_same_thread=False, isolation_level=None, timeout=30)
     conn.execute("PRAGMA busy_timeout=5000;")
     return conn
 
 def ensure_db():
-    # Kilitlenmelere dayanıklı başlangıç: 10 deneme
     for attempt in range(10):
         try:
             conn = get_db()
@@ -259,16 +339,14 @@ def ensure_db():
             try:
                 cur.execute("PRAGMA journal_mode=WAL;")
             except sqlite3.OperationalError:
-                pass  # locked ise sonraki denemede deneriz
-
+                pass
             cur.execute("""
             CREATE TABLE IF NOT EXISTS users (
               id INTEGER PRIMARY KEY AUTOINCREMENT,
               username TEXT UNIQUE NOT NULL,
               pw_hash TEXT NOT NULL,
               role TEXT NOT NULL CHECK(role IN ('admin','staff'))
-            );
-            """)
+            );""")
             cur.execute("""
             CREATE TABLE IF NOT EXISTS usage (
               id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -285,8 +363,7 @@ def ensure_db():
               cost_usd REAL NOT NULL,
               cost_try REAL NOT NULL,
               FOREIGN KEY(user_id) REFERENCES users(id)
-            );
-            """)
+            );""")
             cur.execute("""
             CREATE TABLE IF NOT EXISTS caption_cache (
               hash TEXT PRIMARY KEY,
@@ -295,37 +372,28 @@ def ensure_db():
               in_tokens INTEGER NOT NULL,
               out_tokens INTEGER NOT NULL,
               created_at TEXT NOT NULL
-            );
-            """)
-            # Kolon teminatı (migration)
-            def ensure_column(table, name, ddl):
-                cur.execute(f"PRAGMA table_info({table})")
-                cols = [r[1] for r in cur.fetchall()]
-                if name not in cols:
-                    cur.execute(f"ALTER TABLE {table} ADD COLUMN {name} {ddl}")
-            ensure_column("usage", "project_tag", "TEXT")
-            ensure_column("usage", "plan_month", "TEXT")
-            ensure_column("usage", "user_id", "INTEGER")
+            );""")
             conn.commit(); conn.close()
             return
         except sqlite3.OperationalError as e:
             if "locked" in str(e).lower():
-                time.sleep(0.5)
-                continue
+                time.sleep(0.5); continue
             else:
                 raise
-    raise RuntimeError("SQLite başlangıcında sürekli kilit: tek worker ile çalıştırın veya kalıcı DB kullanın.")
+    raise RuntimeError("SQLite başlangıcında kilit sorunu: tek worker ile çalıştırın veya kalıcı DB kullanın.")
 
 def create_user_if_missing(username: str, password: str, role: str):
     if not username or not password: return
     conn = get_db(); cur = conn.cursor()
     cur.execute("SELECT id FROM users WHERE username=?", (username,))
     row = cur.fetchone()
+    pw_hash = bcrypt.hashpw(password.encode("utf-8"), bcrypt.gensalt()).decode("utf-8")
     if not row:
-        pw_hash = bcrypt.hashpw(password.encode("utf-8"), bcrypt.gensalt()).decode("utf-8")
         cur.execute("INSERT INTO users (username, pw_hash, role) VALUES (?, ?, ?)", (username, pw_hash, role))
-        conn.commit()
-    conn.close()
+    else:
+        if ADMIN_FORCE_SYNC and role == "admin" and username == ADMIN_CODE_USER:
+            cur.execute("UPDATE users SET pw_hash=?, role=? WHERE username=?", (pw_hash, role, username))
+    conn.commit(); conn.close()
 
 def find_user(username: str) -> Optional[dict]:
     conn = get_db(); cur = conn.cursor()
@@ -333,6 +401,34 @@ def find_user(username: str) -> Optional[dict]:
     row = cur.fetchone(); conn.close()
     if not row: return None
     return {"id": row[0], "username": row[1], "pw_hash": row[2], "role": row[3]}
+
+def get_user_by_id(uid: int) -> Optional[dict]:
+    conn = get_db(); cur = conn.cursor()
+    cur.execute("SELECT id, username, role FROM users WHERE id=?", (uid,))
+    r = cur.fetchone(); conn.close()
+    return {"id": r[0], "username": r[1], "role": r[2]} if r else None
+
+def list_users() -> List[dict]:
+    conn = get_db(); cur = conn.cursor()
+    cur.execute("SELECT id, username, role FROM users ORDER BY role DESC, username ASC")
+    rows = cur.fetchall(); conn.close()
+    return [{"id": r[0], "username": r[1], "role": r[2]} for r in rows]
+
+def count_admins() -> int:
+    conn = get_db(); cur = conn.cursor()
+    cur.execute("SELECT COUNT(*) FROM users WHERE role='admin'")
+    n = cur.fetchone()[0]; conn.close(); return int(n)
+
+def delete_user(uid: int):
+    conn = get_db(); cur = conn.cursor()
+    cur.execute("DELETE FROM users WHERE id=?", (uid,))
+    conn.commit(); conn.close()
+
+def update_user_password(uid: int, new_password: str):
+    pw_hash = bcrypt.hashpw(new_password.encode("utf-8"), bcrypt.gensalt()).decode("utf-8")
+    conn = get_db(); cur = conn.cursor()
+    cur.execute("UPDATE users SET pw_hash=? WHERE id=?", (pw_hash, uid))
+    conn.commit(); conn.close()
 
 def log_usage(ts: str, user_id: Optional[int], user_key: str, model: str, doc_name: str,
               project_tag: str, plan_month: str, images: int,
@@ -592,19 +688,22 @@ def require_admin(request: Request) -> Optional[RedirectResponse]:
     return None
 
 # ========= Startup =========
+def seed_admin_from_code():
+    # Koddan belirlediğin admini oluştur (yoksa); ADMIN_FORCE_SYNC True ise parolasını her açılışta senkronlar
+    if not ADMIN_CODE_USER or not ADMIN_CODE_PASS:
+        return
+    create_user_if_missing(ADMIN_CODE_USER, ADMIN_CODE_PASS, "admin")
+
 @app.on_event("startup")
 def _startup():
-    ensure_default_templates()  # varsayılan şablonları yaz (yoksa)
+    ensure_default_templates()
     ensure_db()
-    create_user_if_missing(os.getenv("ADMIN_USER"),  os.getenv("ADMIN_PASS"),  "admin")
-    create_user_if_missing(os.getenv("STAFF1_USER"), os.getenv("STAFF1_PASS"), "staff")
-    create_user_if_missing(os.getenv("STAFF2_USER"), os.getenv("STAFF2_PASS"), "staff")
+    seed_admin_from_code()
 
 @app.get("/healthz")
 def healthz():
     return {"ok": True}
 
-# Render bazen HEAD / isteği atabiliyor; 200 dönelim.
 @app.head("/")
 def index_head():
     return PlainTextResponse("", status_code=200)
@@ -701,28 +800,16 @@ def dashboard(request: Request, user_id: str = "me"):
       ORDER BY ts DESC LIMIT 50
     """, params)
     rows = cur.fetchall()
-
-    users = []
-    if me["role"] == "admin":
-        cur.execute("SELECT id, username, role FROM users ORDER BY role DESC, username ASC")
-        users = cur.fetchall()
     conn.close()
 
     try:
         return templates.TemplateResponse("dashboard.html", {
             "request": request,
             "app_name": APP_NAME,
-            "month_title": now.strftime("%B %Y"),
             "summary": {"runs": cnt, "images": img_sum, "in_tokens": in_sum, "out_tokens": out_sum,
                         "usd": usd_sum, "try": try_sum},
             "rows": rows,
-            "usd_try_rate": USD_TRY_RATE,
-            "model": DEFAULT_MODEL,
-            "rate_in": RATE_IN_PER_MTOK,
-            "rate_out": RATE_OUT_PER_MTOK,
             "user": me,
-            "users": users,
-            "filter_user_id": user_id,
             "csrf_token": get_csrf_token(request)
         })
     except TemplateNotFound:
@@ -771,49 +858,97 @@ def logs_xlsx(request: Request, user_id: str = "me"):
     return StreamingResponse(buf, media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                              headers={"Content-Disposition": f'attachment; filename="{fname}"'})
 
-# ========= Admin: log temizleme =========
-@app.post("/admin/clear_logs")
-async def admin_clear_logs(request: Request):
+# ========= Admin: Kullanıcı Yönetimi =========
+@app.get("/admin/users", response_class=HTMLResponse)
+def admin_users_get(request: Request, flash: str = ""):
+    need = require_admin(request)
+    if need: return need
+    users = list_users()
+    me = current_user(request)
+    return templates.TemplateResponse("admin_users.html", {
+        "request": request,
+        "users": users,
+        "me": me,
+        "flash": flash,
+        "csrf_token": get_csrf_token(request)
+    })
+
+@app.post("/admin/users/create")
+async def admin_user_create(request: Request):
     need = require_admin(request)
     if need: return need
     form = await request.form()
     if not check_csrf(request, form):
         return PlainTextResponse("CSRF doğrulaması başarısız", status_code=403)
 
-    older_than_days = int(form.get("older_than_days") or "0")
-    target_user_id = form.get("user_id")  # "all" veya belirli id
+    username = (form.get("username") or "").strip()
+    password = (form.get("password") or "").strip()
+    role = (form.get("role") or "staff").strip()
+    if role not in ("admin","staff"):
+        role = "staff"
+    if not username or not password:
+        return RedirectResponse(url="/admin/users?flash=Kullanıcı+adı+ve+parola+gerekli", status_code=303)
 
-    now = datetime.datetime.now(TZ) if TZ else datetime.datetime.now()
-    cutoff = now - datetime.timedelta(days=older_than_days) if older_than_days > 0 else None
+    # benzersiz kontrol
+    if find_user(username):
+        return RedirectResponse(url="/admin/users?flash=Bu+kullanıcı+zaten+var", status_code=303)
 
-    conn = get_db(); cur = conn.cursor()
-    if cutoff and target_user_id and target_user_id != "all":
-        cur.execute("DELETE FROM usage WHERE ts < ? AND user_id = ?", (cutoff.isoformat(), int(target_user_id)))
-    elif cutoff and (not target_user_id or target_user_id == "all"):
-        cur.execute("DELETE FROM usage WHERE ts < ?", (cutoff.isoformat(),))
-    elif (not cutoff) and target_user_id and target_user_id != "all":
-        cur.execute("DELETE FROM usage WHERE user_id = ?", (int(target_user_id),))
-    else:
-        conn.close()
-        return RedirectResponse(url="/dashboard", status_code=303)
+    create_user_if_missing(username, password, role)
+    return RedirectResponse(url="/admin/users?flash=Kullanıcı+oluşturuldu", status_code=303)
 
-    conn.commit(); conn.close()
-    return RedirectResponse(url="/dashboard", status_code=303)
+@app.post("/admin/users/delete")
+async def admin_user_delete(request: Request):
+    need = require_admin(request)
+    if need: return need
+    form = await request.form()
+    if not check_csrf(request, form):
+        return PlainTextResponse("CSRF doğrulaması başarısız", status_code=403)
+    me = current_user(request)
+    try:
+        uid = int(form.get("user_id"))
+    except:
+        return RedirectResponse(url="/admin/users?flash=Geçersiz+ID", status_code=303)
+    if uid == me["id"]:
+        return RedirectResponse(url="/admin/users?flash=Kendini+silmezsin", status_code=303)
+
+    target = get_user_by_id(uid)
+    if not target:
+        return RedirectResponse(url="/admin/users?flash=Kullanıcı+bulunamadı", status_code=303)
+
+    if target["role"] == "admin" and count_admins() <= 1:
+        return RedirectResponse(url="/admin/users?flash=Son+admin+silinemez", status_code=303)
+
+    delete_user(uid)
+    return RedirectResponse(url="/admin/users?flash=Kullanıcı+silindi", status_code=303)
+
+@app.post("/admin/users/reset_password")
+async def admin_user_reset_password(request: Request):
+    need = require_admin(request)
+    if need: return need
+    form = await request.form()
+    if not check_csrf(request, form):
+        return PlainTextResponse("CSRF doğrulaması başarısız", status_code=403)
+    try:
+        uid = int(form.get("user_id"))
+    except:
+        return RedirectResponse(url="/admin/users?flash=Geçersiz+ID", status_code=303)
+    new_password = (form.get("new_password") or "").strip()
+    if not new_password:
+        return RedirectResponse(url="/admin/users?flash=Parola+boş+olamaz", status_code=303)
+    update_user_password(uid, new_password)
+    return RedirectResponse(url="/admin/users?flash=Parola+güncellendi", status_code=303)
 
 # ========= Plan üretimi (POST /generate) =========
 @app.post("/generate")
 async def generate(request: Request):
-    # Auth
     need = require_login(request)
     if need: return need
     user = current_user(request)
 
-    # CSRF + form
     form = await request.form()
     if not check_csrf(request, form):
         return PlainTextResponse("CSRF doğrulaması başarısız", status_code=403)
 
-    # Form alanları
     doc_name = (form.get("doc_name") or "").strip()
     contact_info = (form.get("contact_info") or "").strip()
     plan_month = (form.get("plan_month") or "").strip()   # YYYY-MM
@@ -826,7 +961,6 @@ async def generate(request: Request):
     if len(files) > MAX_IMAGES:
         return PlainTextResponse(f"En fazla {MAX_IMAGES} görsel yükleyebilirsiniz.", status_code=400)
 
-    # Plan ayı
     try:
         y_s, m_s = plan_month.split("-"); year, month = int(y_s), int(m_s)
         if not (1 <= month <= 12): raise ValueError()
@@ -840,7 +974,6 @@ async def generate(request: Request):
             f"Aralığı küçültün (örn. 1-2 gün) ya da görsel sayısını azaltın.", status_code=400
         )
 
-    # Görselleri hazırla (önizleme + namespace'li hash)
     async def prep(upload: UploadFile):
         jpeg_bytes, stub, h = await make_preview_bytes(upload)
         namespace = f"{user['id']}|{project_tag}"
@@ -849,7 +982,6 @@ async def generate(request: Request):
 
     processed = await asyncio.gather(*(prep(f) for f in files))
 
-    # DOCX + usage
     try:
         content, total_in, total_out, _ = await build_docx_and_collect_usage(doc_name, contact_info, processed, dates[:len(processed)])
     except Exception as e:
