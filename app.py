@@ -1,4 +1,4 @@
-import io, os, re, json, base64, datetime, sqlite3, csv, traceback, calendar, hashlib, asyncio, secrets
+import io, os, re, json, base64, datetime, sqlite3, csv, traceback, calendar, hashlib, asyncio, secrets, time
 from typing import List, Tuple, Optional
 
 import httpx
@@ -84,60 +84,76 @@ templates = Jinja2Templates(directory="templates")
 
 # ========= DB Yardımcıları =========
 def get_db():
-    conn = sqlite3.connect(DB_PATH, check_same_thread=False, isolation_level=None)
-    conn.execute("PRAGMA journal_mode=WAL;")
+    # timeout=30: kilitliyse 30 sn'ye kadar bekle; busy_timeout da 5 sn beklesin
+    conn = sqlite3.connect(DB_PATH, check_same_thread=False, isolation_level=None, timeout=30)
+    conn.execute("PRAGMA busy_timeout=5000;")
     return conn
 
 def ensure_db():
-    conn = get_db()
-    cur = conn.cursor()
-    cur.execute("""
-    CREATE TABLE IF NOT EXISTS users (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      username TEXT UNIQUE NOT NULL,
-      pw_hash TEXT NOT NULL,
-      role TEXT NOT NULL CHECK(role IN ('admin','staff'))
-    );
-    """)
-    cur.execute("""
-    CREATE TABLE IF NOT EXISTS usage (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      ts TEXT NOT NULL,
-      user_id INTEGER,
-      user_key TEXT,
-      model TEXT NOT NULL,
-      doc_name TEXT NOT NULL,
-      project_tag TEXT,
-      plan_month TEXT,
-      images INTEGER NOT NULL,
-      in_tokens INTEGER NOT NULL,
-      out_tokens INTEGER NOT NULL,
-      cost_usd REAL NOT NULL,
-      cost_try REAL NOT NULL,
-      FOREIGN KEY(user_id) REFERENCES users(id)
-    );
-    """)
-    cur.execute("""
-    CREATE TABLE IF NOT EXISTS caption_cache (
-      hash TEXT PRIMARY KEY,
-      caption TEXT NOT NULL,
-      tags_json TEXT NOT NULL,
-      in_tokens INTEGER NOT NULL,
-      out_tokens INTEGER NOT NULL,
-      created_at TEXT NOT NULL
-    );
-    """)
-    # Kolon teminatı (migration)
-    def ensure_column(table, name, ddl):
-        cur.execute(f"PRAGMA table_info({table})")
-        cols = [r[1] for r in cur.fetchall()]
-        if name not in cols:
-            cur.execute(f"ALTER TABLE {table} ADD COLUMN {name} {ddl}")
-    ensure_column("usage", "project_tag", "TEXT")
-    ensure_column("usage", "plan_month", "TEXT")
-    ensure_column("usage", "user_id", "INTEGER")
-    conn.commit()
-    conn.close()
+    # Kilitlenme durumlarına dayanıklı başlangıç: 10 deneme
+    for attempt in range(10):
+        try:
+            conn = get_db()
+            cur = conn.cursor()
+            try:
+                cur.execute("PRAGMA journal_mode=WAL;")
+            except sqlite3.OperationalError:
+                pass  # locked ise sonraki denemede oturur
+
+            cur.execute("""
+            CREATE TABLE IF NOT EXISTS users (
+              id INTEGER PRIMARY KEY AUTOINCREMENT,
+              username TEXT UNIQUE NOT NULL,
+              pw_hash TEXT NOT NULL,
+              role TEXT NOT NULL CHECK(role IN ('admin','staff'))
+            );
+            """)
+            cur.execute("""
+            CREATE TABLE IF NOT EXISTS usage (
+              id INTEGER PRIMARY KEY AUTOINCREMENT,
+              ts TEXT NOT NULL,
+              user_id INTEGER,
+              user_key TEXT,
+              model TEXT NOT NULL,
+              doc_name TEXT NOT NULL,
+              project_tag TEXT,
+              plan_month TEXT,
+              images INTEGER NOT NULL,
+              in_tokens INTEGER NOT NULL,
+              out_tokens INTEGER NOT NULL,
+              cost_usd REAL NOT NULL,
+              cost_try REAL NOT NULL,
+              FOREIGN KEY(user_id) REFERENCES users(id)
+            );
+            """)
+            cur.execute("""
+            CREATE TABLE IF NOT EXISTS caption_cache (
+              hash TEXT PRIMARY KEY,
+              caption TEXT NOT NULL,
+              tags_json TEXT NOT NULL,
+              in_tokens INTEGER NOT NULL,
+              out_tokens INTEGER NOT NULL,
+              created_at TEXT NOT NULL
+            );
+            """)
+            # Kolon teminatı (migration)
+            def ensure_column(table, name, ddl):
+                cur.execute(f"PRAGMA table_info({table})")
+                cols = [r[1] for r in cur.fetchall()]
+                if name not in cols:
+                    cur.execute(f"ALTER TABLE {table} ADD COLUMN {name} {ddl}")
+            ensure_column("usage", "project_tag", "TEXT")
+            ensure_column("usage", "plan_month", "TEXT")
+            ensure_column("usage", "user_id", "INTEGER")
+            conn.commit(); conn.close()
+            return
+        except sqlite3.OperationalError as e:
+            if "locked" in str(e).lower():
+                time.sleep(0.5)
+                continue
+            else:
+                raise
+    raise RuntimeError("SQLite başlangıcında sürekli kilit: tek worker ile çalıştırın veya kalıcı DB kullanın.")
 
 def create_user_if_missing(username: str, password: str, role: str):
     if not username or not password: return
@@ -425,6 +441,11 @@ def _startup():
 @app.get("/healthz")
 def healthz():
     return {"ok": True}
+
+# Render bazen HEAD / isteği atabiliyor; 200 dönelim.
+@app.head("/")
+def index_head():
+    return PlainTextResponse("", status_code=200)
 
 # ========= Login / Logout =========
 @app.get("/login", response_class=HTMLResponse)
