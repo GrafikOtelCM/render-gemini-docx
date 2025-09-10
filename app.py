@@ -5,14 +5,12 @@ import io
 from datetime import datetime
 from typing import Optional, List
 
-from fastapi import FastAPI, Request, Form, UploadFile, File, Depends
+from fastapi import FastAPI, Request, Form, UploadFile, File
 from fastapi.responses import HTMLResponse, RedirectResponse, StreamingResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from starlette.middleware.sessions import SessionMiddleware
-from starlette.middleware.base import BaseHTTPMiddleware
 from passlib.hash import bcrypt
-from pydantic import BaseModel
 
 from docx import Document
 from docx.shared import Inches
@@ -36,6 +34,7 @@ os.makedirs(STATIC_DIR, exist_ok=True)
 
 # ========= App =========
 app = FastAPI(title=APP_NAME)
+# Session middleware MUTLAKA yüklü (cookie tabanlı oturum)
 app.add_middleware(SessionMiddleware, secret_key=SECRET_KEY, same_site="lax", https_only=False)
 templates = Jinja2Templates(directory=TEMPLATES_DIR)
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
@@ -92,44 +91,22 @@ def verify_csrf(request: Request, token_from_form: str):
 
 # ========= Auth Helpers =========
 def current_user(request: Request) -> Optional[dict]:
+    # SessionMiddleware yüklü; burada güvenle erişebiliriz
     return request.session.get("user")
 
 
-def require_role(user: Optional[dict], role: str) -> bool:
-    return bool(user and user.get("role") == role)
+def require_login_redirect(request: Request) -> Optional[RedirectResponse]:
+    """Giriş yapılmamışsa login'e yönlendiren yardımcı."""
+    if not current_user(request):
+        return RedirectResponse(url="/login", status_code=302)
+    return None
 
 
-# ========= Auth Guard Middleware =========
-PUBLIC_PATHS = {"/login", "/health", "/healthz", "/static"}
-
-
-class AuthRequiredMiddleware(BaseHTTPMiddleware):
-    async def dispatch(self, request: Request, call_next):
-        path = request.url.path
-        is_public = path == "/" and False  # root korumalı
-        if any(path == p or path.startswith(p + "/") for p in PUBLIC_PATHS):
-            return await call_next(request)
-
-        # Korumalı yollar: /, /admin, /create-plan, /logout, ... hepsi
-        user = current_user(request)
-        if not user and path != "/login":
-            return RedirectResponse(url="/login", status_code=302)
-
-        # Admin alanı kontrolü
-        if path.startswith("/admin") and not require_role(user, "admin"):
-            return RedirectResponse(url="/", status_code=302)
-
-        return await call_next(request)
-
-
-app.add_middleware(AuthRequiredMiddleware)
-
-
-# ========= Schemas (yalın) =========
-class CreateUserForm(BaseModel):
-    username: str
-    password: str
-    role: str
+def require_admin_redirect(request: Request) -> Optional[RedirectResponse]:
+    user = current_user(request)
+    if not user or user.get("role") != "admin":
+        return RedirectResponse(url="/", status_code=302)
+    return None
 
 
 # ========= Routes =========
@@ -152,9 +129,12 @@ def healthz():
 # ---------- Auth ----------
 @app.get("/login", response_class=HTMLResponse)
 def login_get(request: Request):
+    # Zaten girişliyse ana sayfaya at
+    if current_user(request):
+        return RedirectResponse(url="/", status_code=302)
     return templates.TemplateResponse(
         "login.html",
-        {"request": request, "csrf_token": get_csrf_token(request), "app_name": APP_NAME},
+        {"request": request, "csrf_token": get_csrf_token(request), "app_name": APP_NAME, "user": None},
     )
 
 
@@ -193,6 +173,11 @@ def logout(request: Request):
 # ---------- Home / Plan ----------
 @app.get("/", response_class=HTMLResponse)
 def home(request: Request):
+    # Giriş zorunlu
+    redir = require_login_redirect(request)
+    if redir:
+        return redir
+
     user = current_user(request)
     return templates.TemplateResponse(
         "index.html",
@@ -216,6 +201,11 @@ async def create_plan(
     images: List[UploadFile] = File([]),
     csrf_token: str = Form(...),
 ):
+    # Giriş zorunlu
+    redir = require_login_redirect(request)
+    if redir:
+        return redir
+
     # CSRF
     verify_csrf(request, csrf_token)
 
@@ -295,9 +285,9 @@ async def create_plan(
 # ---------- Admin ----------
 @app.get("/admin", response_class=HTMLResponse)
 def admin_page(request: Request):
-    user = current_user(request)
-    if not require_role(user, "admin"):
-        return RedirectResponse(url="/", status_code=302)
+    redir = require_admin_redirect(request)
+    if redir:
+        return redir
 
     conn = get_db()
     cur = conn.cursor()
@@ -310,7 +300,7 @@ def admin_page(request: Request):
         "admin.html",
         {
             "request": request,
-            "user": user,
+            "user": current_user(request),
             "users": users,
             "csrf_token": get_csrf_token(request),
             "app_name": APP_NAME,
@@ -326,9 +316,9 @@ async def admin_create_user(
     role: str = Form("user"),
     csrf_token: str = Form(...),
 ):
-    user = current_user(request)
-    if not require_role(user, "admin"):
-        return RedirectResponse(url="/", status_code=302)
+    redir = require_admin_redirect(request)
+    if redir:
+        return redir
     try:
         verify_csrf(request, csrf_token)
     except Exception:
@@ -355,9 +345,9 @@ async def admin_delete_user(
     user_id: int = Form(...),
     csrf_token: str = Form(...),
 ):
-    user = current_user(request)
-    if not require_role(user, "admin"):
-        return RedirectResponse(url="/", status_code=302)
+    redir = require_admin_redirect(request)
+    if redir:
+        return redir
     try:
         verify_csrf(request, csrf_token)
     except Exception:
