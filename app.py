@@ -14,7 +14,6 @@ from starlette.status import HTTP_303_SEE_OTHER
 from PIL import Image, ImageOps
 from docx import Document
 from docx.shared import Inches, Pt
-from docx.oxml.ns import qn
 
 # ---------- Config ----------
 APP_NAME = os.getenv("APP_NAME", "Otel Planlama Stüdyosu")
@@ -25,13 +24,11 @@ GEMINI_API_KEY = os.getenv("GEMINI_API_KEY") or os.getenv("GeminiAPI")
 GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-1.5-flash")
 
 # HEIC/HEIF desteği
-HEIF_OK = False
 try:
     from pillow_heif import register_heif_opener  # type: ignore
     register_heif_opener()
-    HEIF_OK = True
 except Exception:
-    HEIF_OK = False
+    pass
 
 # Gemini opsiyonel
 GEMINI_OK = False
@@ -95,17 +92,6 @@ def require_admin(req: Request) -> Optional[RedirectResponse]:
         return RedirectResponse(url="/login", status_code=HTTP_303_SEE_OTHER)
     return None
 
-def guess_extension(content_type: str) -> str:
-    if not content_type:
-        return ".jpg"
-    if "png" in content_type:
-        return ".png"
-    if "webp" in content_type:
-        return ".webp"
-    if "heic" in content_type or "heif" in content_type:
-        return ".heic"
-    return ".jpg"
-
 def open_image_safely(data: bytes) -> Image.Image:
     img = Image.open(io.BytesIO(data))
     try:
@@ -123,7 +109,7 @@ def open_image_safely(data: bytes) -> Image.Image:
 # Basit emoji seti
 EMOJIS = ["✨", "🏖️", "🌅", "🌊", "🌿", "🧳", "📷", "🌞", "💫", "🍹", "🌙", "🏨", "💙"]
 
-def fallback_caption_and_tags(index: int, hotel_info: str) -> Tuple[str, str]:
+def fallback_caption_and_tags(index: int) -> Tuple[str, str]:
     base = [
         "Denizin sesi, gün batımının sıcaklığı 🌅🌊",
         "Yeni anılar biriktirme zamanı 🧳✨",
@@ -132,22 +118,22 @@ def fallback_caption_and_tags(index: int, hotel_info: str) -> Tuple[str, str]:
         "Fotoğraf gibi kareler 📷💫",
     ]
     text = base[index % len(base)]
-    if hotel_info:
-        text += f"  {hotel_info}"
-    tags = "#otel #tatil #konfor #deniz #günbatımı #holiday #travel #relax #booking #getaway"
-    return text, tags
+    tags = "#otel #tatil #konfor #deniz #holiday #travel #relax #booking #getaway #sunset"
+    # 8 tag’a indir
+    tag_tokens = [t for t in tags.split() if t.startswith("#")][:5]
+    return text, " ".join(tag_tokens)
 
-async def gemini_caption_and_tags(image_bytes: bytes, hotel_info: str) -> Tuple[str, str]:
+async def gemini_caption_and_tags(image_bytes: bytes) -> Tuple[str, str]:
+    # Otel iletişim bilgisi ASLA karıştırılmıyor
     if not GEMINI_OK:
-        return fallback_caption_and_tags(0, hotel_info)
+        return fallback_caption_and_tags(0)
     try:
         model = genai.GenerativeModel(GEMINI_MODEL)
         prompt = (
-            "Fotoğrafı analiz et ve görsele uygun, TÜRKÇE, 1–2 cümlelik KISA bir Instagram açıklaması yaz. "
-            "Açıklama mutlaka EMOJİ içersin. Maksimum ~220 karakter. "
-            "Sonraki satırda tek satırlık 8–10 hashtag üret. "
-            "Hiçbir başlık (Açıklama/Hashtag) yazma; sadece iki satır: 1) açıklama 2) hashtagler. "
-            f"Otelle ilgili bilgiyi doğalca açıklamaya yedir: {hotel_info or '—'}"
+            "Bu fotoğraf için TÜRKÇE, görsele uygun ve EMOJİLİ, 1–2 cümlelik KISA bir Instagram açıklaması üret. "
+            "En fazla ~220 karakter. İletişim bilgisi veya başlık (Açıklama/Hashtag) yazma.\n"
+            "Ayrıca ikinci satırda 8 kısa hashtag ver. Sadece iki satır döndür:\n"
+            "1) açıklama\n2) hashtagler (8 adet, tek satır)."
         )
         img_part = {"mime_type": "image/jpeg", "data": image_bytes}
         res = await model.generate_content_async([prompt, img_part])
@@ -157,90 +143,118 @@ async def gemini_caption_and_tags(image_bytes: bytes, hotel_info: str) -> Tuple[
             cap = parts[0]
             tags = parts[1]
         else:
-            cap, tags = fallback_caption_and_tags(0, hotel_info)
-        # güvenlik: çok uzun hashtag tek satırda kalsın
-        if " " in tags:
-            tag_tokens = [t for t in tags.split() if t.startswith("#")]
-            tag_tokens = tag_tokens[:10]
-            tags = " ".join(tag_tokens) if tag_tokens else tags
+            cap, tags = fallback_caption_and_tags(0)
+        # hashtagleri 8’e indir ve tek satır
+        tag_tokens = [t for t in tags.split() if t.startswith("#")][:8]
+        tags = " ".join(tag_tokens) if tag_tokens else tags
         if not any(e in cap for e in EMOJIS):
             cap = cap + " " + EMOJIS[0]
         return cap, tags
     except Exception:
-        return fallback_caption_and_tags(0, hotel_info)
+        return fallback_caption_and_tags(0)
 
 # ---- Yerleşim yardımcıları ----
-def set_default_doc_styling(doc: Document):
+def set_default_doc_styling(doc: Document, base_pt: float = 10.0):
     style = doc.styles["Normal"]
-    font = style.font
-    font.size = Pt(10)
-    font.name = "Calibri"
-    # Türkçe dil bilgisi (opsiyonel)
-    try:
-        style.element.rPr.rPrChange.rPr.set(qn("w:lang"), None)  # temizle
-    except Exception:
-        pass
+    style.font.size = Pt(base_pt)
+    style.font.name = "Calibri"
 
 def estimate_lines(text: str, chars_per_line: int) -> int:
-    text = " ".join(text.split())  # satır sonlarını tek boşluğa indir
+    text = " ".join(text.split())
     if not text:
         return 0
     import math
     return max(1, math.ceil(len(text) / max(10, chars_per_line)))
 
-def compute_picture_size_for_page(
-    img_w_px: int,
-    img_h_px: int,
-    text_lines_total: int,
-    page_width_in: float,
-    page_height_in: float,
-    margin_left_in: float,
-    margin_right_in: float,
-    margin_top_in: float,
-    margin_bottom_in: float,
-    line_height_in: float = 0.1667,  # ~12pt
-    top_block_in: float = 0.15,      # tarih satırı ve küçük boşluk
-    bottom_buffer_in: float = 0.12,  # sayfa taşmasını kesin önleme payı
-) -> Tuple[float, float]:
+def compute_fit(
+    img_px: Tuple[int, int],
+    caption: str,
+    hotel_info: str,
+    hashtags: str,
+    page_w_in: float,
+    page_h_in: float,
+    ml: float, mr: float, mt: float, mb: float,
+    font_pt: float,
+) -> Tuple[float, float, bool]:
     """
-    Resmin genişlik/yüksekliğini (inch) döndürür; oran korunur, metin için yer bırakılır.
+    Resmi mümkün olan en genişte başlatır (metin sütunu genişliği),
+    sığmazsa %5 kademe ile küçültür. Gerekirse small_text=True (9pt).
+    Dönen: (width_in, height_in, small_text)
     """
-    text_height_in = text_lines_total * line_height_in
-    available_h_in = max(
+    # satır yüksekliği ~ pt / 72 inch
+    line_h_in = (font_pt / 72.0) * 1.05  # %5 güvenlik
+    text_w_in = max(3.0, page_w_in - ml - mr)
+
+    def total_text_lines(chars_per_line: int) -> int:
+        # tarih 1 satır
+        ln = 1
+        ln += estimate_lines(caption, chars_per_line)
+        if hotel_info:
+            ln += estimate_lines(hotel_info, chars_per_line)
+        # hashtag tek satır hedef; yine de tahminde 1 al
+        ln += 1
+        return ln
+
+    # Karakter/satır kaba tahmin: ~12 cpi @10pt; @9pt biraz daha fazla
+    cpi = 12.0 * (font_pt / 10.0)  # 9pt ~10.8
+    chars_per_line = int(max(40, text_w_in * cpi))
+    lines = total_text_lines(chars_per_line)
+
+    # üst blok (tarih ve az boşluk) + altta tampon
+    top_block_in = line_h_in * 1.2
+    bottom_buf_in = 0.12
+    avail_h = max(
         0.5,
-        page_height_in - margin_top_in - margin_bottom_in - text_height_in - top_block_in - bottom_buffer_in
+        page_h_in - mt - mb - (lines * line_h_in) - top_block_in - bottom_buf_in
     )
 
-    # metin sütunu genişliği (resmi bununla başlat)
-    text_width_in = max(3.0, page_width_in - margin_left_in - margin_right_in)
+    # hedef genişlik ve doğal yükseklik
+    img_w_px, img_h_px = img_px
+    w_in = text_w_in
+    h_in = (img_h_px / img_w_px) * w_in
 
-    # Resmin bu genişlikteki doğal yüksekliği
-    natural_h_in = (img_h_px / img_w_px) * text_width_in
+    # büyüksen kademeli küçült
+    min_w_in = 2.2  # son çare
+    while (h_in > avail_h) and (w_in > min_w_in):
+        w_in *= 0.95
+        h_in = (img_h_px / img_w_px) * w_in
 
-    if natural_h_in <= available_h_in:
-        return text_width_in, natural_h_in
+    # hâlâ sığmıyorsa küçük yazı ile tekrar hesapla (9pt)
+    small_text = False
+    if h_in > avail_h:
+        small_text = True
+        font_pt2 = 9.0
+        line_h_in2 = (font_pt2 / 72.0) * 1.05
+        cpi2 = 12.0 * (font_pt2 / 10.0)
+        chars_per_line2 = int(max(44, text_w_in * cpi2))
+        lines2 = 1 + estimate_lines(caption, chars_per_line2) + (estimate_lines(hotel_info, chars_per_line2) if hotel_info else 0) + 1
+        avail_h2 = max(0.5, page_h_in - mt - mb - (lines2 * line_h_in2) - top_block_in - bottom_buf_in)
+        # görseli tekrar küçültme döngüsü
+        w2 = min(w_in, text_w_in)
+        h2 = (img_h_px / img_w_px) * w2
+        while (h2 > avail_h2) and (w2 > min_w_in):
+            w2 *= 0.95
+            h2 = (img_h_px / img_w_px) * w2
+        w_in, h_in = w2, h2
 
-    # Sığmıyorsa, aynı oranla küçült
-    scale = available_h_in / natural_h_in
-    final_w_in = max(3.0, text_width_in * scale)
-    final_h_in = (img_h_px / img_w_px) * final_w_in
-    return final_w_in, final_h_in
+    return w_in, h_in, small_text
 
-def add_text_paragraph(doc: Document, text: str, bold: bool = False):
-    p = doc.add_paragraph(text)
-    if p.runs:
-        p.runs[0].bold = bold
+def add_text_paragraph(doc: Document, text: str, bold: bool = False, pt: float = 10.0):
+    p = doc.add_paragraph()
+    run = p.add_run(text)
+    run.bold = bold
+    run.font.size = Pt(pt)
+    run.font.name = "Calibri"
     fmt = p.paragraph_format
     fmt.space_before = Pt(0)
-    fmt.space_after = Pt(2)
+    fmt.space_after = Pt(1.5)
     fmt.line_spacing = 1.0
     return p
 
-def add_image_with_fit(doc: Document, img_bytes: bytes, width_in: float, height_in: float):
-    # PIL ile yeniden örnekleyip ekle (kalite kontrolü)
+def add_image_resized(doc: Document, img_bytes: bytes, width_in: float, height_in: float):
     img = open_image_safely(img_bytes)
-    target_w_px = int(width_in * 96)
-    target_h_px = int(height_in * 96)
+    target_w_px = max(1, int(width_in * 96))
+    target_h_px = max(1, int(height_in * 96))
     img = img.resize((target_w_px, target_h_px), Image.LANCZOS)
     buf = io.BytesIO()
     img.save(buf, format="JPEG", quality=88)
@@ -259,14 +273,13 @@ def write_plan_docx(
     """
     Her sayfa:
       [Tarih]
-      [Görsel - oran korunarak kalan yüksekliğe sığdırılır]
-      [Açıklama (emojili, başlıksız)]
-      [Otel iletişim (başlıksız)]
-      [Hashtag (tek satır, başlıksız)]
-    Tamamı tek sayfada kalacak şekilde resim boyutu dinamik ayarlanır.
+      [Görsel]
+      [Açıklama (emoji, başlıksız)]
+      [Otel iletişim (ayrı satır)]
+      [Hashtag (tek satır, 8 tag)]
+    Hepsi **tek sayfa**.
     """
     doc = Document()
-    set_default_doc_styling(doc)
 
     # Kenar boşlukları
     sect = doc.sections[0]
@@ -282,47 +295,37 @@ def write_plan_docx(
     mt = sect.top_margin.inches
     mb = sect.bottom_margin.inches
 
-    # Karakter/satır tahmini (10pt için ~12 cpi * metin genişliği)
-    text_width_in = page_w_in - ml - mr
-    chars_per_line = max(40, int(text_width_in * 12))
+    base_font_pt = 10.0
 
     for i, raw in enumerate(images):
         share_date = (start_date + timedelta(days=i * every_n_days)).strftime("%d.%m.%Y")
         caption = " ".join(captions[i].split())
         tags = " ".join(tags_list[i].split())
-        # hashtag güvenliği: tek satırda kalsın
-        tag_tokens = [t for t in tags.split() if t.startswith("#")]
-        tag_tokens = tag_tokens[:10]
+        # hashtagleri 8’e indir
+        tag_tokens = [t for t in tags.split() if t.startswith("#")][:8]
         tags = " ".join(tag_tokens) if tag_tokens else tags
 
-        # metin satır tahmini
-        total_text_lines = 1  # tarih
-        total_text_lines += estimate_lines(caption, chars_per_line)
-        if hotel_info:
-            total_text_lines += estimate_lines(hotel_info, chars_per_line)
-        total_text_lines += 1  # hashtag tek satır varsayıyoruz
-
-        # resim için boyut hesabı
         img = open_image_safely(raw)
-        pic_w_in, pic_h_in = compute_picture_size_for_page(
-            img_w_px=img.size[0],
-            img_h_px=img.size[1],
-            text_lines_total=total_text_lines,
-            page_width_in=page_w_in,
-            page_height_in=page_h_in,
-            margin_left_in=ml,
-            margin_right_in=mr,
-            margin_top_in=mt,
-            margin_bottom_in=mb,
+        pic_w_in, pic_h_in, small_text = compute_fit(
+            img_px=img.size,
+            caption=caption,
+            hotel_info=hotel_info,
+            hashtags=tags,
+            page_w_in=page_w_in,
+            page_h_in=page_h_in,
+            ml=ml, mr=mr, mt=mt, mb=mb,
+            font_pt=base_font_pt,
         )
+        pt_this = 9.0 if small_text else base_font_pt
 
         # içerik yazımı
-        add_text_paragraph(doc, share_date, bold=True)
-        add_image_with_fit(doc, raw, pic_w_in, pic_h_in)
-        add_text_paragraph(doc, caption, bold=False)
+        set_default_doc_styling(doc, base_pt=pt_this)
+        add_text_paragraph(doc, share_date, bold=True, pt=pt_this)
+        add_image_resized(doc, raw, pic_w_in, pic_h_in)
+        add_text_paragraph(doc, caption, bold=False, pt=pt_this)
         if hotel_info:
-            add_text_paragraph(doc, hotel_info, bold=False)
-        add_text_paragraph(doc, tags, bold=False)
+            add_text_paragraph(doc, hotel_info, bold=False, pt=pt_this)
+        add_text_paragraph(doc, tags, bold=False, pt=pt_this)
 
         if i < len(images) - 1:
             doc.add_page_break()
@@ -439,14 +442,14 @@ async def api_plan(
     tags_list: List[str] = []
     for idx, img in enumerate(images_bytes):
         if GEMINI_OK:
-            cap, tags = await gemini_caption_and_tags(img, hotel_contact)
+            cap, tags = await gemini_caption_and_tags(img)
         else:
-            cap, tags = fallback_caption_and_tags(idx, hotel_contact)
+            cap, tags = fallback_caption_and_tags(idx)
         if not any(e in cap for e in EMOJIS):
             cap += " " + EMOJIS[idx % len(EMOJIS)]
-        # Hashtag tek satır güvenliği
+        # hashtagleri 8’e sabitle
         tag_tokens = [t for t in tags.split() if t.startswith("#")]
-        tags = " ".join(tag_tokens[:10]) if tag_tokens else tags
+        tags = " ".join(tag_tokens[:8]) if tag_tokens else tags
         captions.append(cap)
         tags_list.append(tags)
 
