@@ -1,45 +1,106 @@
-{% extends "base.html" %}
-{% block content %}
-<h1>Instagram Planı Oluştur</h1>
-
-<section class="card">
-  <form id="planForm" class="grid" enctype="multipart/form-data">
-    <div>
-      <label>Dosya Adı</label>
-      <input name="doc_title" placeholder="Instagram_Plani" />
-    </div>
-    <div>
-      <label>Başlangıç Tarihi</label>
-      <input type="date" name="start_date" required />
-    </div>
-    <div>
-      <label>Kaç günde 1?</label>
-      <input type="number" name="every_n_days" min="1" value="1" required />
-    </div>
-    <div class="col-span-2">
-      <label>Otel İletişim Bilgisi (etiketsiz eklenecek)</label>
-      <textarea name="hotel_contact" rows="3" placeholder="☎️ 0xxx... • 📍 Adres • www..."></textarea>
-    </div>
-
-    <div class="col-span-2">
-      <label>Görseller (sürükle-bırak)</label>
-      <div id="dropzone" class="dropzone">
-        <input id="fileInput" type="file" name="files" accept="image/*" multiple />
-        <p>Görselleri buraya bırak veya tıkla</p>
+<!doctype html>
+<html lang="tr">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>{{ app_name }} — Plan Oluştur</title>
+  <link rel="stylesheet" href="/static/css/app.css">
+  <style>
+    /* Basit koyu-açık arası modern görünüm (tasarım bozulmadan) */
+    :root { --bg:#0f172a; --card:#111827; --muted:#9ca3af; --text:#e5e7eb; --accent:#22c55e; --accent-2:#06b6d4; }
+    body{margin:0;background:linear-gradient(180deg,#0b1220,#0f172a);min-height:100dvh;font-family:ui-sans-serif,system-ui,Segoe UI,Roboto,Helvetica,Arial}
+    .wrap{max-width:1100px;margin:0 auto;padding:24px}
+    .nav{display:flex;gap:12px;align-items:center;justify-content:space-between;margin-bottom:20px}
+    .nav a{color:var(--text);text-decoration:none;opacity:.9}
+    .nav .brand{font-weight:700;letter-spacing:.2px}
+    .card{background:linear-gradient(180deg,#0f172a,#0b1220);border:1px solid #1f2937;border-radius:16px;box-shadow:0 10px 30px rgba(0,0,0,.35);padding:18px}
+    .grid{display:grid;grid-template-columns:1.1fr .9fr;gap:18px}
+    label{display:block;color:var(--muted);font-size:13px;margin:8px 0 6px}
+    input, select, textarea{width:100%;background:#0b1220;border:1px solid #253047;color:var(--text);padding:10px 12px;border-radius:10px;outline:none}
+    input[type="file"]{padding:8px;background:#0b1220;border:1px dashed #334155}
+    .btn{display:inline-flex;align-items:center;gap:8px;background:linear-gradient(180deg,#22c55e,#16a34a);border:none;color:#0b1220;font-weight:700;padding:12px 16px;border-radius:12px;cursor:pointer}
+    .btn:disabled{opacity:.6;cursor:not-allowed}
+    .muted{color:var(--muted);font-size:12px}
+    .drop{border:1px dashed #334155;border-radius:12px;padding:14px;text-align:center;background:#0b1220;color:var(--muted)}
+    .thumbs{display:grid;grid-template-columns:repeat(auto-fill,minmax(90px,1fr));gap:10px;margin-top:10px}
+    .thumb{position:relative;border-radius:10px;overflow:hidden;border:1px solid #253047}
+    .thumb img{width:100%;height:100%;object-fit:cover;display:block}
+    .row{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+    .progress{height:6px;background:#172036;border-radius:99px;overflow:hidden}
+    .bar{height:100%;width:0;background:linear-gradient(90deg,#06b6d4,#22c55e)}
+    .note{margin-top:6px}
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="nav">
+      <div>
+        <a class="brand" href="/plan">📅 {{ app_name }}</a>
       </div>
-      <div id="thumbs" class="thumbs"></div>
+      <div style="display:flex;gap:14px;">
+        <a href="/plan">Plan</a>
+        <a href="/admin">Admin</a>
+        <a href="/logout">Çıkış</a>
+      </div>
     </div>
 
-    <div class="row-end">
-      <button class="btn" type="submit">Planı Oluştur</button>
-    </div>
-  </form>
-</section>
+    <div class="card">
+      <form id="planForm" action="/api/plan" method="post" enctype="multipart/form-data" onsubmit="return false;">
+        <div class="grid">
+          <div>
+            <label>Görseller (sürükle-bırak veya seç) — çoklu</label>
+            <div id="drop" class="drop">
+              Dosyaları buraya bırakın ya da tıklayın
+              <input id="images" name="images" type="file" accept="image/*" multiple style="display:none">
+            </div>
+            <div id="thumbs" class="thumbs"></div>
+            <div class="note muted">Not: Görseller 1080×1350 ise Word’de 16×20 cm olarak yerleşir; her görsele özel metin & 4 hashtag oluşturulur.</div>
+          </div>
 
-<section class="muted">
-  <ul>
-    <li>Her sayfa: <strong>Tarih</strong> → <strong>Görsel</strong> → <strong>Emojili Açıklama</strong> → <strong>Otel info</strong> → <strong>Hashtag</strong></li>
-    <li>Başlıklar (Açıklama/Hashtag) eklenmez — metinler direkt kopyalanabilir.</li>
-  </ul>
-</section>
-{% endblock %}
+          <div>
+            <div class="row">
+              <div>
+                <label>Ay seçin</label>
+                <input type="month" id="plan_month" name="plan_month" required>
+              </div>
+              <div>
+                <label>Kaç günde bir?</label>
+                <input type="number" id="every_n_days" name="every_n_days" min="1" step="1" value="2" required>
+              </div>
+            </div>
+
+            <div class="row" style="margin-top:8px;">
+              <div>
+                <label>Plan adı</label>
+                <input type="text" id="plan_name" name="plan_name" placeholder="Instagram_Plani" value="Instagram_Plani" required>
+              </div>
+              <div>
+                <label>Hashtag adedi</label>
+                <input type="number" value="4" disabled>
+              </div>
+            </div>
+
+            <label style="margin-top:8px;">Otel iletişim bilgileri (başlıksız, tek blok)</label>
+            <textarea id="hotel_info" name="hotel_info" rows="5" placeholder="Otel Adı
+Telefon: +90 ...
+Adres: ...
+Web: ..."></textarea>
+
+            <div style="display:flex;align-items:center;gap:12px;margin-top:14px;">
+              <button id="submitBtn" class="btn">Planı Oluştur</button>
+              <div style="flex:1;">
+                <div class="progress"><div id="bar" class="bar"></div></div>
+              </div>
+              <span id="status" class="muted">Hazır</span>
+            </div>
+          </div>
+        </div>
+      </form>
+    </div>
+
+    <p class="muted" style="margin-top:10px;">Tüm alanların **FormData** ile gönderildiğinden emin olmak için bu sayfanın JS’i `/static/js/app.js` dosyasındadır.</p>
+  </div>
+
+  <script src="/static/js/app.js"></script>
+</body>
+</html>
