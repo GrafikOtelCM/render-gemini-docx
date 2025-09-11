@@ -1,454 +1,389 @@
 import os
 import io
-import json
 import sqlite3
-import datetime as dt
+from datetime import datetime, timedelta, date
 from typing import List, Optional, Tuple
 
-from fastapi import FastAPI, Request, UploadFile, Form, Depends, HTTPException
-from fastapi.responses import HTMLResponse, RedirectResponse, StreamingResponse, JSONResponse, PlainTextResponse
+from fastapi import FastAPI, Request, Form, UploadFile, File, Depends
+from fastapi.responses import RedirectResponse, StreamingResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
-
 from starlette.middleware.sessions import SessionMiddleware
-from starlette.middleware.base import BaseHTTPMiddleware
-
+from starlette.status import HTTP_302_FOUND, HTTP_303_SEE_OTHER
 from passlib.hash import bcrypt
-from PIL import Image
+
 from docx import Document
 from docx.shared import Inches, Pt
-from docx.enum.text import WD_ALIGN_PARAGRAPH
-from docx.oxml.ns import qn
+from PIL import Image
 
-from dotenv import load_dotenv
-
-# --- ENV ---
-load_dotenv()
-
+# -----------------------------------------------------------------------------
+# Ortam değişkenleri / sabitler
+# -----------------------------------------------------------------------------
 APP_NAME = os.getenv("APP_NAME", "Otel Planlama Stüdyosu")
-SECRET_KEY = os.getenv("SECRET_KEY", "change-me")
-USAGE_DB = os.getenv("USAGE_DB_PATH", "/tmp/usage.db")
+SECRET_KEY = os.getenv("SECRET_KEY", "dev-secret-change-me")
+DB_PATH = os.getenv("USAGE_DB_PATH", "/tmp/usage.db")
 
-# Gemini API key'i iki farklı isimde arıyoruz: GEMINI_API_KEY veya GeminiAPI
-def _get_first_env(keys: List[str]) -> Optional[str]:
-    for k in keys:
-        v = os.getenv(k)
-        if v and v.strip():
-            return v.strip()
-    return None
-
-GEMINI_API_KEY = _get_first_env(["GEMINI_API_KEY", "GeminiAPI"])
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY") or os.getenv("GeminiAPI")
 GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
-GEMINI_MAX_CONCURRENCY = int(os.getenv("GEMINI_MAX_CONCURRENCY", "1"))
 
-# Google Generative AI (Gemini) SDK (isteğe bağlı hata toleransı ile import)
-_gemini_available = False
-try:
-    import google.generativeai as genai
-    if GEMINI_API_KEY:
-        genai.configure(api_key=GEMINI_API_KEY)
-        _gemini_available = True
-except Exception:
-    _gemini_available = False
+ADMIN_CODE_USER = os.getenv("ADMIN_CODE_USER", "admin")
+ADMIN_CODE_PASS = os.getenv("ADMIN_CODE_PASS", "admin123")
 
-
-# --- APP ---
+# -----------------------------------------------------------------------------
+# Uygulama
+# -----------------------------------------------------------------------------
 app = FastAPI(title=APP_NAME)
 
-# Session
-app.add_middleware(SessionMiddleware, secret_key=SECRET_KEY, session_cookie="ops_session", max_age=60 * 60 * 8)
+# Session middleware (request.session için ŞART)
+app.add_middleware(SessionMiddleware, secret_key=SECRET_KEY, same_site="lax", https_only=False)
 
-# Basit auth context göstermek için
-class AuthContextMiddleware(BaseHTTPMiddleware):
-    async def dispatch(self, request: Request, call_next):
-        request.state.user = request.session.get("user") if "session" in request.scope else None
-        return await call_next(request)
+# Statik dosyalar (tema için gerekli)
+this_dir = os.path.dirname(os.path.abspath(__file__))
+static_dir = os.path.join(this_dir, "static")
+templates_dir = os.path.join(this_dir, "templates")
 
-app.add_middleware(AuthContextMiddleware)
+if not os.path.isdir(static_dir):
+    os.makedirs(static_dir, exist_ok=True)
+if not os.path.isdir(templates_dir):
+    os.makedirs(templates_dir, exist_ok=True)
 
-# Static & Templates (varsa)
-if os.path.isdir("static"):
-    app.mount("/static", StaticFiles(directory="static"), name="static")
-templates = Jinja2Templates(directory="templates" if os.path.isdir("templates") else ".")
+app.mount("/static", StaticFiles(directory=static_dir), name="static")
 
+# Jinja2
+templates = Jinja2Templates(directory=templates_dir)
+templates.env.globals["app_name"] = APP_NAME
+templates.env.globals["now"] = lambda: datetime.utcnow().year
 
-# --- Basit kullanıcı deposu (sqlite /tmp) ---
-def db_init():
-    os.makedirs("/tmp", exist_ok=True)
-    con = sqlite3.connect(USAGE_DB)
-    cur = con.cursor()
-    cur.execute("""
-    CREATE TABLE IF NOT EXISTS users (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        username TEXT UNIQUE,
-        password_hash TEXT NOT NULL,
-        role TEXT NOT NULL DEFAULT 'user',
-        created_at TEXT NOT NULL
+# -----------------------------------------------------------------------------
+# DB yardımcıları
+# -----------------------------------------------------------------------------
+def get_conn():
+    conn = sqlite3.connect(DB_PATH, check_same_thread=False)
+    conn.execute("PRAGMA journal_mode=WAL;")
+    return conn
+
+def init_db():
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute(
+        """
+        CREATE TABLE IF NOT EXISTS users(
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            username TEXT UNIQUE NOT NULL,
+            password_hash TEXT NOT NULL,
+            role TEXT NOT NULL DEFAULT 'user',
+            created_at TEXT NOT NULL
+        );
+        """
     )
-    """)
-    con.commit()
-    # Admin tohumlama
-    cur.execute("SELECT 1 FROM users WHERE username=?", (os.getenv("ADMIN_CODE_USER", "admin"),))
-    if not cur.fetchone():
-        u = os.getenv("ADMIN_CODE_USER", "admin")
-        p = os.getenv("ADMIN_CODE_PASS", "admin123")
+    # Admin varsa ellemeyelim, yoksa tohumla
+    cur.execute("SELECT 1 FROM users WHERE username=?", (ADMIN_CODE_USER,))
+    if cur.fetchone() is None:
         cur.execute(
-            "INSERT INTO users (username, password_hash, role, created_at) VALUES (?,?,?,?)",
-            (u, bcrypt.hash(p), "admin", dt.datetime.utcnow().isoformat()),
+            "INSERT INTO users(username, password_hash, role, created_at) VALUES(?,?,?,?)",
+            (
+                ADMIN_CODE_USER,
+                bcrypt.hash(ADMIN_CODE_PASS),
+                "admin",
+                datetime.utcnow().isoformat(timespec="seconds"),
+            ),
         )
-        con.commit()
-    con.close()
+    conn.commit()
+    conn.close()
 
-@app.on_event("startup")
-def _startup():
-    db_init()
+def verify_user(username: str, password: str) -> Optional[Tuple[int, str, str]]:
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute("SELECT id, username, password_hash, role FROM users WHERE username=?", (username,))
+    row = cur.fetchone()
+    conn.close()
+    if row and bcrypt.verify(password, row[2]):
+        return (row[0], row[1], row[3])
+    return None
 
+def list_users() -> List[Tuple]:
+    conn = get_conn()
+    cur = conn.cursor()
+    cur.execute("SELECT id, username, role, created_at FROM users ORDER BY id ASC")
+    rows = cur.fetchall()
+    conn.close()
+    return rows
 
-# --- Yardımcılar ---
+init_db()
+
+# -----------------------------------------------------------------------------
+# Auth yardımcıları
+# -----------------------------------------------------------------------------
+def current_user(request: Request) -> Optional[dict]:
+    # SessionMiddleware kurulu; doğrudan erişebiliriz.
+    return request.session.get("user")
+
 def require_login(request: Request):
-    user = request.session.get("user") if "session" in request.scope else None
+    user = current_user(request)
     if not user:
-        raise HTTPException(status_code=302, detail="login required")
-    return user
+        return False
+    return True
 
-def require_admin(request: Request):
-    user = require_login(request)
-    if user.get("role") != "admin":
-        raise HTTPException(status_code=403, detail="forbidden")
-    return user
-
-def pil_from_upload(f: UploadFile) -> Tuple[Image.Image, bytes, str]:
-    raw = f.file.read()
-    mime = f.content_type or "image/jpeg"
-    img = Image.open(io.BytesIO(raw))
-    # RGB'ye çevir (docx bazı modlarda sorun çıkartır)
-    if img.mode not in ("RGB", "RGBA"):
-        img = img.convert("RGB")
-    return img, raw, mime
-
-def mm_from_inches(inch: float) -> float:
-    return inch * 25.4
-
-# --- Gemini ile görsele uygun açıklama+hashtag üretimi ---
-def gemini_for_image(raw: bytes, mime: str, otel_adi: str, iletisim: str, paylasim_tarihi: str) -> dict:
+# -----------------------------------------------------------------------------
+# Yardımcılar: Gemini (opsiyonel) + DOCX üretimi
+# -----------------------------------------------------------------------------
+def try_gemini_generate(otel_adi: str, image_bytes: bytes) -> Tuple[str, str]:
     """
-    Gemini'den JSON dönmesi beklenir:
-    { "caption": "...", "hashtags": ["#otel", "#tatil", ...] }
+    Varsa Gemini ile açıklama ve hashtag üret, yoksa makul bir fallback üret.
+    Görseli base64 gömmek yerine, prompt'ı görsel betimleme odaklı kuruyoruz.
     """
-    # Eğer SDK yoksa ya da anahtar yoksa fallback
-    if not _gemini_available or not GEMINI_API_KEY:
-        return {
-            "caption": f"{otel_adi} için paylaşıma hazır bir görsel. {paylasim_tarihi} tarihinde yayınlanmak üzere kısa ve sıcak bir tanıtım metni.",
-            "hashtags": ["#otel", "#tatil", "#rezervasyon", "#istanbul", "#keşfet"]
-        }
+    # Fallback (Gemini yoksa)
+    def fallback():
+        desc = f"{otel_adi} için görsele uygun çekici bir paylaşım metni. Odanın, ortamın ve konseptin öne çıkan özellikleri vurgulanır."
+        hashtags = "#otel #tatil #rezervasyon #holiday #oteltavsiye #seyahat #konfor #manzara"
+        return desc, hashtags
 
-    prompt = (
-        "Sen bir sosyal medya içerik editörüsün. Aşağıdaki otel görseli için **Türkçe**, sıcak ve satışa dönük ama samimi bir Instagram açıklaması üret.\n"
-        "- Metin 2-4 cümle olsun, emoji aşırıya kaçmadan 1-3 tane kullanılabilir.\n"
-        "- Otel adı mutlaka bir kez geçsin.\n"
-        "- Tarih: {date} (metinde istersen çağrışım olarak kullanabilirsin, zorunlu değil).\n"
-        "- Sonra 8-12 adet etkileşim odaklı **Türkçe hashtag** üret (konum/tema bazlı, spam olmayan, görsele uygun).\n"
-        "- ÇIKTIYI SADECE JSON VER: {{\"caption\":\"...\",\"hashtags\":[\"#...\"]}}\n"
-        "- Hashtag'lerde # işareti kullan.\n"
-        f"- Otel iletişim bilgisi (bilgi amaçlı): {iletisim}\n"
-    ).format(date=paylasim_tarihi)
+    if not GEMINI_API_KEY:
+        return fallback()
 
-    # SDK: image + text istemi
-    model = genai.GenerativeModel(GEMINI_MODEL)
+    # Hafif bir istem: görsel içeriğine uygun kısa TR metin + hashtag
+    # Not: Burada sade bir REST örneği bırakıyoruz; Render ortamında key varsa çalışır.
     try:
-        resp = model.generate_content(
-            [
-                {"mime_type": mime, "data": raw},
-                prompt
-            ],
-            request_options={"timeout": 60}
+        import json
+        import httpx
+
+        prompt = (
+            "Aşağıdaki otel görseli için Türkçe, samimi ve kısa bir Instagram açıklaması üret. "
+            "1-2 cümle yeterli. Yeni satırda 8-12 arası Türkçe hashtag ver. "
+            f"Otel adı: {otel_adi}. Hashtaglerde otel adı geçebilir."
         )
-        txt = (resp.text or "").strip()
-        # Bazı modeller ```json blokları döndürür; temizleyelim
-        if txt.startswith("```"):
-            txt = txt.strip("`")
-            # olası "json\n{...}"
-            parts = txt.split("\n", 1)
-            if len(parts) == 2 and parts[0].lower().strip() == "json":
-                txt = parts[1].strip()
-        data = json.loads(txt)
-        caption = str(data.get("caption", "")).strip()
-        hashtags = data.get("hashtags") or []
-        if isinstance(hashtags, str):
-            hashtags = [h.strip() for h in hashtags.split() if h.strip().startswith("#")]
-        hashtags = [h if h.startswith("#") else f"#{h}" for h in hashtags][:15]
-        if not caption:
-            caption = f"{otel_adi} ile konforlu bir kaçamak. Rezervasyon için bize ulaşın!"
-        if not hashtags:
-            hashtags = ["#otel", "#tatil", "#rezervasyon"]
-        return {"caption": caption, "hashtags": hashtags}
-    except Exception:
-        # Fallback
-        return {
-            "caption": f"{otel_adi}’de keyif dolu bir konaklama için seni bekliyoruz. Erken rezervasyon fırsatlarını kaçırma!",
-            "hashtags": ["#otel", "#tatil", "#rezervasyon", "#haftasonu", "#keşfet"]
+
+        # Gemini REST (text-only prompt). Görseli şu aşamada zorunlu kılmıyoruz;
+        # istenirse image parts ile base64 gönderimi eklenebilir.
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_MODEL}:generateContent?key={GEMINI_API_KEY}"
+        payload = {
+            "contents": [
+                {
+                    "parts": [
+                        {"text": prompt}
+                    ]
+                }
+            ]
         }
+        headers = {"Content-Type": "application/json"}
+        with httpx.Client(timeout=20) as client:
+            r = client.post(url, headers=headers, content=json.dumps(payload))
+            r.raise_for_status()
+            data = r.json()
+            text = (
+                data.get("candidates", [{}])[0]
+                .get("content", {})
+                .get("parts", [{}])[0]
+                .get("text", "")
+            )
 
+        if not text:
+            return fallback()
 
-# --- DOCX inşa ---
+        # Metni açıklama + hashtag olarak ikiye ayırmayı dene
+        lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
+        desc_lines = []
+        tag_lines = []
+        for ln in lines:
+            if ln.startswith("#") or " #" in ln:
+                tag_lines.append(ln)
+            else:
+                desc_lines.append(ln)
+        desc = " ".join(desc_lines)[:500] if desc_lines else text[:500]
+        if tag_lines:
+            hashtags = " ".join(tag_lines)
+        else:
+            hashtags = "#otel #tatil #rezervasyon #holiday #oteltavsiye #seyahat #konfor #manzara"
+        return desc, hashtags
+
+    except Exception:
+        return fallback()
+
+def safe_filename(name: str) -> str:
+    name = name.strip() or "Instagram_Plani"
+    bad = '<>:"/\\|?*'
+    for ch in bad:
+        name = name.replace(ch, "_")
+    if not name.lower().endswith(".docx"):
+        name += ".docx"
+    return name
+
+def add_heading(p, text: str, bold=True, size=14):
+    run = p.add_run(text)
+    run.bold = bold
+    run.font.size = Pt(size)
+
 def build_docx(
     otel_adi: str,
     iletisim: str,
-    baslangic_tarihi: str,
+    baslangic: date,
     tekrar_gunu: int,
-    dosya_adi: str,
-    images: List[Tuple[Image.Image, bytes, str]]
-) -> io.BytesIO:
-
+    images: List[Tuple[str, bytes]],
+) -> bytes:
+    """
+    Şablonunuz: her sayfa = 1 görsel
+     - Üstte "Paylaşım Tarihi: gg.aa.yyyy"
+     - Altında: görsele UYGUN açıklama (Gemini veya fallback)
+     - Altında: Otel iletişim bilgisi
+     - Altında: Hashtagler
+    """
     doc = Document()
 
-    # Varsayılan font
-    style = doc.styles['Normal']
-    style.font.name = 'Calibri'
-    style._element.rPr.rFonts.set(qn('w:eastAsia'), 'Calibri')
-    style.font.size = Pt(10.5)
+    # Sayfa kenarları biraz dar
+    for section in doc.sections:
+        section.left_margin = Inches(0.6)
+        section.right_margin = Inches(0.6)
+        section.top_margin = Inches(0.6)
+        section.bottom_margin = Inches(0.7)
 
-    # Tarih üretici
-    try:
-        start = dt.datetime.strptime(baslangic_tarihi, "%Y-%m-%d")
-    except ValueError:
-        start = dt.datetime.utcnow()
+    current_date = baslangic
 
-    current_date = start
+    for idx, (filename, blob) in enumerate(images):
+        if idx > 0:
+            doc.add_page_break()
 
-    for idx, (img, raw, mime) in enumerate(images, start=1):
-        # Sayfa başına düzen
-        # Üstte tarih
-        p_date = doc.add_paragraph(current_date.strftime("%d.%m.%Y"))
-        p_date.alignment = WD_ALIGN_PARAGRAPH.CENTER
-        p_date.runs[0].bold = True
+        # Başlık: Paylaşım Tarihi
+        p = doc.add_paragraph()
+        add_heading(p, f"Paylaşım Tarihi: {current_date.strftime('%d.%m.%Y')}", bold=True, size=14)
 
-        # Görsel: sayfayı taşırmadan tek görsel
-        # A4 genişlik ~6.5 inç iç kenar; 5.5 inç hedefleyelim
-        max_width_in = 5.5
-        bio = io.BytesIO()
-        # DOCX için jpg daha stabil
-        img_to_save = img.convert("RGB")
-        img_to_save.save(bio, format="JPEG", quality=90)
-        bio.seek(0)
-        doc.add_picture(bio, width=Inches(max_width_in))
+        # Görsel: genişliğe sığdır
+        image_stream = io.BytesIO(blob)
+        try:
+            im = Image.open(image_stream)
+            im_format = im.format
+            image_stream.seek(0)
+        except Exception:
+            # Görsel açılamazsa atla
+            continue
 
-        # Gemini'den açıklama + hashtag
-        ai = gemini_for_image(raw, mime, otel_adi, iletisim, current_date.strftime("%d.%m.%Y"))
+        # Genişliği 6.0 inch gibi verelim (sayfaya yakışır)
+        doc.add_picture(image_stream, width=Inches(6.0))
+
+        # Açıklama + Hashtag (Gemini veya fallback)
+        desc, hashtags = try_gemini_generate(otel_adi, blob)
 
         # Açıklama
-        p_caption = doc.add_paragraph(ai["caption"])
-        p_caption.alignment = WD_ALIGN_PARAGRAPH.LEFT
+        p2 = doc.add_paragraph()
+        add_heading(p2, "Açıklama:", bold=True, size=12)
+        doc.add_paragraph(desc)
 
-        # Otel iletişim (her sayfada)
-        if iletisim.strip():
-            p_contact = doc.add_paragraph(iletisim.strip())
-            p_contact.alignment = WD_ALIGN_PARAGRAPH.LEFT
+        # İletişim
+        p3 = doc.add_paragraph()
+        add_heading(p3, "Otel İletişim:", bold=True, size=12)
+        doc.add_paragraph(iletisim or "")
 
-        # Hashtagler
-        if ai["hashtags"]:
-            p_hash = doc.add_paragraph(" ".join(ai["hashtags"]))
-            p_hash.alignment = WD_ALIGN_PARAGRAPH.LEFT
+        # Hashtag
+        p4 = doc.add_paragraph()
+        add_heading(p4, "Hashtag:", bold=True, size=12)
+        doc.add_paragraph(hashtags)
 
-        # Sayfa sonu
-        doc.add_page_break()
+        # Sonraki paylaşım tarihi
+        current_date = current_date + timedelta(days=max(1, tekrar_gunu))
 
-        # Bir sonraki tarih
-        current_date = current_date + dt.timedelta(days=max(1, int(tekrar_gunu)))
+    out = io.BytesIO()
+    doc.save(out)
+    out.seek(0)
+    return out.read()
 
-    # Son sayfadaki boş page break'ı yumuşak bırakalım (zorunlu değil)
-    # (docx kütüphanesi kolay kaldırmaya izin vermiyor; sorun değil.)
-
-    buf = io.BytesIO()
-    doc.save(buf)
-    buf.seek(0)
-    return buf
-
-
-# --- ROUTES ---
-
-@app.get("/health", response_class=PlainTextResponse)
+# -----------------------------------------------------------------------------
+# Rotalar
+# -----------------------------------------------------------------------------
+@app.get("/health")
 def health():
-    return "ok"
+    return PlainTextResponse("ok")
 
-@app.get("/", response_class=HTMLResponse)
-def home(request: Request):
-    # login yoksa login sayfasına
-    if not request.session.get("user"):
-        return RedirectResponse("/login")
-    return RedirectResponse("/plan")
+@app.get("/")
+def root(request: Request):
+    if current_user(request):
+        return RedirectResponse(url="/plan", status_code=HTTP_302_FOUND)
+    return RedirectResponse(url="/login", status_code=HTTP_302_FOUND)
 
-@app.get("/login", response_class=HTMLResponse)
+@app.get("/login")
 def login_page(request: Request):
-    # Basit HTML (eğer templates yoksa)
-    if os.path.isdir("templates"):
-        return templates.TemplateResponse("login.html", {"request": request, "app_name": APP_NAME})
-    html = f"""
-    <html><head><title>{APP_NAME} - Giriş</title></head>
-    <body style="font-family: system-ui; max-width: 420px; margin:40px auto;">
-      <h2>{APP_NAME}</h2>
-      <form method="post" action="/login">
-        <label>Kullanıcı adı</label><br/>
-        <input name="username" required style="width:100%;padding:8px;margin:6px 0;"/><br/>
-        <label>Şifre</label><br/>
-        <input name="password" type="password" required style="width:100%;padding:8px;margin:6px 0;"/><br/>
-        <button style="padding:10px 14px;">Giriş</button>
-      </form>
-    </body></html>
-    """
-    return HTMLResponse(html)
+    return templates.TemplateResponse("login.html", {"request": request, "app_name": APP_NAME})
 
 @app.post("/login")
-async def login(request: Request, username: str = Form(...), password: str = Form(...)):
-    con = sqlite3.connect(USAGE_DB)
-    cur = con.cursor()
-    cur.execute("SELECT id, username, password_hash, role FROM users WHERE username=?", (username,))
-    row = cur.fetchone()
-    con.close()
-    if not row or not bcrypt.verify(password, row[2]):
-        return HTMLResponse("<h3>Hatalı giriş</h3><a href='/login'>Geri dön</a>", status_code=401)
-    request.session["user"] = {"id": row[0], "username": row[1], "role": row[3]}
-    return RedirectResponse("/plan", status_code=302)
+def login_post(
+    request: Request,
+    username: str = Form(...),
+    password: str = Form(...),
+):
+    user_info = verify_user(username, password)
+    if not user_info:
+        # Hata mesajını çok basit bırakalım
+        return templates.TemplateResponse(
+            "login.html",
+            {
+                "request": request,
+                "app_name": APP_NAME,
+                "error": "Kullanıcı adı veya şifre hatalı.",
+            },
+            status_code=400,
+        )
+    # Oturum aç
+    request.session["user"] = {"id": user_info[0], "username": user_info[1], "role": user_info[2]}
+    return RedirectResponse(url="/plan", status_code=HTTP_303_SEE_OTHER)
 
 @app.post("/logout")
 def logout(request: Request):
-    request.session.pop("user", None)
-    return RedirectResponse("/login", status_code=302)
+    request.session.clear()
+    return RedirectResponse(url="/login", status_code=HTTP_303_SEE_OTHER)
 
-@app.get("/plan", response_class=HTMLResponse)
+@app.get("/plan")
 def plan_page(request: Request):
-    if not request.session.get("user"):
-        return RedirectResponse("/login")
-    # Basit form (templates yoksa)
-    if os.path.isdir("templates"):
-        return templates.TemplateResponse("plan.html", {"request": request, "app_name": APP_NAME})
-    html = f"""
-    <html><head><title>{APP_NAME} - Plan Oluştur</title></head>
-    <body style="font-family: system-ui; max-width: 900px; margin:24px auto;">
-      <h2>Plan Oluştur</h2>
-      <form method="post" action="/generate" enctype="multipart/form-data">
-        <div style="display:grid;grid-template-columns:1fr 1fr; gap:12px;">
-          <div>
-            <label>Otel adı</label><br/>
-            <input name="otel_adi" required style="width:100%;padding:8px;"/>
-          </div>
-          <div>
-            <label>Otel iletişim bilgisi</label><br/>
-            <input name="iletisim" placeholder="Telefon, e-posta, adres..." style="width:100%;padding:8px;"/>
-          </div>
-          <div>
-            <label>Başlangıç tarihi</label><br/>
-            <input name="baslangic_tarihi" type="date" required style="width:100%;padding:8px;"/>
-          </div>
-          <div>
-            <label>Kaç günde bir paylaşılsın?</label><br/>
-            <input name="tekrar_gunu" type="number" value="1" min="1" style="width:100%;padding:8px;"/>
-          </div>
-          <div>
-            <label>Çıkacak Word dosya adı</label><br/>
-            <input name="dosya_adi" placeholder="Instagram_Plani.docx" style="width:100%;padding:8px;"/>
-          </div>
-          <div>
-            <label>Görseller (çoklu seçim)</label><br/>
-            <input name="images" type="file" accept="image/*" multiple required />
-          </div>
-        </div>
-        <div style="margin-top:14px;">
-          <button style="padding:10px 14px;">Planı Oluştur</button>
-        </div>
-      </form>
-      <form method="post" action="/logout" style="margin-top:16px;">
-        <button>Çıkış</button>
-      </form>
-    </body></html>
-    """
-    return HTMLResponse(html)
+    if not require_login(request):
+        return RedirectResponse(url="/login", status_code=HTTP_302_FOUND)
+    return templates.TemplateResponse("plan.html", {"request": request, "app_name": APP_NAME})
 
 @app.post("/generate")
-async def generate_plan(
+def generate_doc(
     request: Request,
     otel_adi: str = Form(...),
     iletisim: str = Form(""),
     baslangic_tarihi: str = Form(...),
     tekrar_gunu: int = Form(1),
     dosya_adi: str = Form("Instagram_Plani.docx"),
-    images: List[UploadFile] = []
+    images: List[UploadFile] = File(...),
 ):
-    # Güvenlik
-    if not request.session.get("user"):
-        return RedirectResponse("/login")
+    if not require_login(request):
+        return RedirectResponse(url="/login", status_code=HTTP_302_FOUND)
 
-    if not images:
-        return HTMLResponse("<h3>Görsel yüklenmedi</h3><a href='/plan'>Geri dön</a>", status_code=400)
-
-    parsed_images: List[Tuple[Image.Image, bytes, str]] = []
-    for f in images:
-        try:
-            img, raw, mime = pil_from_upload(f)
-            parsed_images.append((img, raw, mime))
-        except Exception:
-            continue
-
-    if not parsed_images:
-        return HTMLResponse("<h3>Geçerli görsel bulunamadı</h3><a href='/plan'>Geri dön</a>", status_code=400)
-
-    docx_buf = build_docx(
-        otel_adi=otel_adi.strip(),
-        iletisim=iletisim.strip(),
-        baslangic_tarihi=baslangic_tarihi.strip(),
-        tekrar_gunu=int(tekrar_gunu),
-        dosya_adi=dosya_adi.strip(),
-        images=parsed_images
-    )
-
-    filename = dosya_adi.strip() or "Instagram_Plani.docx"
-    if not filename.lower().endswith(".docx"):
-        filename += ".docx"
-
-    return StreamingResponse(
-        docx_buf,
-        media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-        headers={"Content-Disposition": f'attachment; filename="{filename}"'}
-    )
-
-
-# --- Basit admin (kullanıcı listesi) ---
-@app.get("/admin", response_class=HTMLResponse)
-def admin_page(request: Request):
+    # Tarih parse
     try:
-        user = require_admin(request)
-    except HTTPException:
-        return RedirectResponse("/login")
+        baslangic = datetime.strptime(baslangic_tarihi, "%Y-%m-%d").date()
+    except Exception:
+        baslangic = date.today()
 
-    con = sqlite3.connect(USAGE_DB)
-    cur = con.cursor()
-    cur.execute("SELECT id, username, role, created_at FROM users ORDER BY id DESC")
-    rows = cur.fetchall()
-    con.close()
+    # Görselleri oku
+    img_list: List[Tuple[str, bytes]] = []
+    for uf in images:
+        blob = uf.file.read()
+        if blob:
+            img_list.append((uf.filename, blob))
 
-    if os.path.isdir("templates"):
-        return templates.TemplateResponse("admin.html", {"request": request, "user": user, "rows": rows, "app_name": APP_NAME})
+    if not img_list:
+        return PlainTextResponse("Görsel yüklenmedi.", status_code=400)
 
-    # Basit tablo (templates yoksa)
-    trs = "".join(
-        f"<tr><td>{r[0]}</td><td>{r[1]}</td><td>{r[2]}</td><td>{r[3]}</td></tr>"
-        for r in rows
+    content = build_docx(
+        otel_adi=otel_adi,
+        iletisim=iletisim,
+        baslangic=baslangic,
+        tekrar_gunu=int(max(1, tekrar_gunu)),
+        images=img_list,
     )
-    html = f"""
-    <html><head><title>Admin - {APP_NAME}</title></head>
-    <body style="font-family: system-ui; max-width: 900px; margin:24px auto;">
-      <h2>Admin Panel</h2>
-      <a href="/plan">Plan oluştur</a>
-      <table border="1" cellpadding="6" cellspacing="0" style="margin-top:12px;width:100%;">
-        <thead><tr><th>ID</th><th>Kullanıcı</th><th>Rol</th><th>Oluşturma</th></tr></thead>
-        <tbody>{trs}</tbody>
-      </table>
-    </body></html>
-    """
-    return HTMLResponse(html)
 
+    filename = safe_filename(dosya_adi)
+    headers = {
+        "Content-Disposition": f'attachment; filename="{filename}"'
+    }
+    return StreamingResponse(io.BytesIO(content), media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document", headers=headers)
 
-# HEAD isteklerinde 200 dönelim (Render port kontrolü vs.)
-@app.head("/")
-def head_root():
-    return PlainTextResponse("", status_code=200)
+@app.get("/admin")
+def admin_page(request: Request):
+    user = current_user(request)
+    if not user:
+        return RedirectResponse(url="/login", status_code=HTTP_302_FOUND)
+    if user.get("role") != "admin":
+        return RedirectResponse(url="/plan", status_code=HTTP_302_FOUND)
+    rows = list_users()
+    return templates.TemplateResponse("admin.html", {"request": request, "rows": rows, "app_name": APP_NAME})
