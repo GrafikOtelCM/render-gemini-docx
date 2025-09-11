@@ -1,46 +1,46 @@
 {% extends "base.html" %}
 {% block content %}
-<div class="card">
-  <h1 class="title">Admin • Kullanıcılar</h1>
+<h1>Admin Paneli</h1>
+{% if error %}<div class="alert">{{ error }}</div>{% endif %}
 
-  <form method="post" action="/admin/users/create" class="grid">
-    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-    <label>Kullanıcı adı
-      <input name="username" required>
-    </label>
-    <label>Şifre
-      <input name="password" type="password" required>
-    </label>
-    <label>Rol
+<section class="card">
+  <h2>Yeni Kullanıcı Oluştur</h2>
+  <form method="post" action="/admin/create-user" class="grid">
+    <div>
+      <label>Kullanıcı Adı</label>
+      <input name="username" required />
+    </div>
+    <div>
+      <label>Şifre</label>
+      <input name="password" required />
+    </div>
+    <div>
+      <label>Rol</label>
       <select name="role">
         <option value="user">user</option>
         <option value="admin">admin</option>
       </select>
-    </label>
-    <button class="btn-primary" type="submit">Oluştur</button>
+    </div>
+    <div class="row-end">
+      <button class="btn" type="submit">Oluştur</button>
+    </div>
   </form>
+</section>
 
-  <h2 class="subtitle">Mevcut kullanıcılar</h2>
-  <table class="table">
-    <thead><tr><th>ID</th><th>Kullanıcı</th><th>Rol</th><th>Oluşturulma</th><th></th></tr></thead>
-    <tbody>
-      {% for u in users %}
-      <tr>
-        <td>{{ u.id }}</td>
-        <td>{{ u.username }}</td>
-        <td>{{ u.role }}</td>
-        <td>{{ u.created_at }}</td>
-        <td>
-          {% if u.username != 'admin' %}
-          <form method="post" action="/admin/users/{{ u.id }}/delete" onsubmit="return confirm('Silinsin mi?')" style="display:inline;">
-            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-            <button class="btn-danger" type="submit">Sil</button>
-          </form>
-          {% endif %}
-        </td>
-      </tr>
-      {% endfor %}
-    </tbody>
-  </table>
-</div>
+<section class="card">
+  <h2>Kullanıcılar</h2>
+  <div class="table">
+    <div class="thead">
+      <div>ID</div><div>Kullanıcı Adı</div><div>Rol</div><div>Oluşturma</div>
+    </div>
+    {% for u in users %}
+    <div class="trow">
+      <div>{{ u.id }}</div>
+      <div>{{ u.username }}</div>
+      <div>{{ u.role }}</div>
+      <div>{{ u.created_at }}</div>
+    </div>
+    {% endfor %}
+  </div>
+</section>
 {% endblock %}
