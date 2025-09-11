@@ -1,91 +1,108 @@
-// Hızlı ay seçimi: açılır listede içinde bulunduğumuz ay + 5 ay daha
-(function setupMonthQuick() {
-  const sel = document.querySelector('#month-quick');
+// ----- küçük yardımcılar -----
+function $(q) { return document.querySelector(q); }
+function el(tag, cls) { const e = document.createElement(tag); if (cls) e.className = cls; return e; }
+
+// ----- hızlı ay listesi -----
+(function fillMonths() {
+  const sel = $("#quick_month");
   if (!sel) return;
-  const targetSel = sel.getAttribute('data-target');
-  const target = document.querySelector(targetSel);
-  if (!target) return;
-
-  const today = new Date();
-  for (let i = -1; i <= 6; i++) {
-    const d = new Date(today.getFullYear(), today.getMonth() + i, 1);
-    const val = d.toISOString().slice(0,10); // YYYY-MM-01
-    const name = d.toLocaleDateString('tr-TR', { month:'long', year:'numeric' });
-    const opt = document.createElement('option');
-    opt.value = val; opt.textContent = name.charAt(0).toUpperCase() + name.slice(1);
-    sel.appendChild(opt);
+  const now = new Date();
+  for (let i = 0; i < 12; i++) {
+    const d = new Date(now.getFullYear(), i, 1);
+    const v = `${d.getFullYear()}-${String(i+1).padStart(2,"0")}-01`;
+    const o = document.createElement("option");
+    o.value = v;
+    o.textContent = d.toLocaleDateString("tr-TR", { month: "long", year: "numeric" });
+    sel.appendChild(o);
   }
-  sel.addEventListener('change', () => {
-    if (sel.value) target.value = sel.value;
+  sel.addEventListener("change", () => {
+    if (sel.value) $("#start_date").value = sel.value;
   });
 })();
 
-// Sürükle-bırak çoklu görsel önizleme (küçük kutular)
-(function setupUploader(){
-  const zone = document.querySelector('[data-uploader]');
-  if (!zone) return;
+// ----- sürükle-bırak -----
+(function setupDrop() {
+  const drop = $("#dropzone");
+  const input = $("#images");
+  const preview = $("#preview");
+  if (!drop || !input || !preview) return;
 
-  const fileInput = zone.querySelector('input[type="file"]');
-  const drop = zone.querySelector('[data-drop]');
-  const thumbs = zone.querySelector('[data-thumbs]');
-  const browseBtn = zone.querySelector('[data-browse]');
-
-  const dataTransfer = new DataTransfer();
-
-  function renderThumb(file, idx){
-    const url = URL.createObjectURL(file);
-    const item = document.createElement('div');
-    item.className = 'thumb';
-    item.innerHTML = `<img src="${url}" alt="">
-      <button type="button" class="del">Sil</button>`;
-    const btn = item.querySelector('.del');
-    btn.addEventListener('click', () => {
-      // listeden çıkar
-      const files = Array.from(dataTransfer.files);
-      files.splice(idx,1);
-      const dt = new DataTransfer();
-      files.forEach(f => dt.items.add(f));
-      fileInput.files = dt.files;
-      thumbs.innerHTML = '';
-      Array.from(fileInput.files).forEach((f,i)=> renderThumb(f,i));
+  function handleFiles(files) {
+    if (!files || !files.length) return;
+    preview.innerHTML = "";
+    Array.from(files).forEach(file => {
+      const url = URL.createObjectURL(file);
+      const img = el("img", "thumb");
+      img.src = url;
+      img.onload = () => URL.revokeObjectURL(url);
+      preview.appendChild(img);
     });
-    thumbs.appendChild(item);
   }
 
-  function appendFiles(list){
-    const current = Array.from(dataTransfer.files);
-    Array.from(list).forEach(f => {
-      if (!f.type.startsWith('image/')) return;
-      current.push(f);
-    });
-    const dt = new DataTransfer();
-    current.forEach(f => dt.items.add(f));
-    fileInput.files = dt.files;
-    thumbs.innerHTML = '';
-    Array.from(fileInput.files).forEach((f,i)=> renderThumb(f,i));
-  }
+  input.addEventListener("change", e => handleFiles(e.target.files));
 
-  browseBtn?.addEventListener('click', () => fileInput.click());
-  fileInput.addEventListener('change', e => appendFiles(e.target.files));
-
-  ;['dragenter','dragover'].forEach(ev => {
-    drop.addEventListener(ev, e => { e.preventDefault(); drop.classList.add('drag'); });
-  });
-  ;['dragleave','drop'].forEach(ev => {
-    drop.addEventListener(ev, e => { e.preventDefault(); drop.classList.remove('drag'); });
-  });
-  drop.addEventListener('drop', e => {
-    const files = e.dataTransfer?.files;
-    if (files && files.length) appendFiles(files);
+  ;["dragenter","dragover"].forEach(ev => drop.addEventListener(ev, e => {
+    e.preventDefault(); e.stopPropagation(); drop.classList.add("hover");
+  }));
+  ;["dragleave","drop"].forEach(ev => drop.addEventListener(ev, e => {
+    e.preventDefault(); e.stopPropagation(); drop.classList.remove("hover");
+  }));
+  drop.addEventListener("drop", e => {
+    const dt = e.dataTransfer;
+    if (dt && dt.files && dt.files.length) {
+      $("#images").files = dt.files; // input'a yaz
+      handleFiles(dt.files);
+    }
   });
 })();
 
-// Form gönderiminde butonu kilitle (çoklu tıklama önle)
-(function protectSubmit(){
-  const form = document.getElementById('plan-form');
-  if (!form) return;
-  const btn = document.getElementById('submit-btn');
-  form.addEventListener('submit', () => {
-    if (btn){ btn.disabled = true; btn.textContent = 'Oluşturuluyor…'; }
+// ----- plan oluştur -----
+(function planCreate() {
+  const btn = $("#createBtn");
+  if (!btn) return;
+
+  btn.addEventListener("click", async () => {
+    const status = $("#status");
+    status.textContent = "Oluşturuluyor…";
+    btn.disabled = true;
+
+    try {
+      const fd = new FormData();
+      fd.append("csrf_token", $("#csrf_token").value);
+      fd.append("hotel_name", $("#hotel_name").value);
+      fd.append("contact_info", $("#contact_info").value);
+      fd.append("start_date", $("#start_date").value); // yyyy-mm-dd
+      fd.append("interval_days", $("#interval_days").value);
+      fd.append("docx_filename", $("#docx_filename").value || "Instagram_Plani.docx");
+
+      const files = $("#images").files;
+      if (!files || !files.length) {
+        alert("En az bir görsel seçin.");
+        status.textContent = "";
+        btn.disabled = false;
+        return;
+      }
+      Array.from(files).forEach(f => fd.append("images", f, f.name));
+
+      const res = await fetch("/api/plan/create", { method: "POST", body: fd });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data.detail || ("Hata (" + res.status + ")"));
+      }
+
+      const blob = await res.blob();
+      const a = document.createElement("a");
+      a.href = URL.createObjectURL(blob);
+      a.download = ($("#docx_filename").value || "Instagram_Plani.docx").replace(/[^a-zA-Z0-9_.\-ğüşöçıİĞÜŞÖÇ]/g, "_");
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      status.textContent = "Plan başarıyla oluşturuldu.";
+    } catch (err) {
+      alert(err.message || "Plan oluşturulamadı.");
+      $("#status").textContent = "";
+    } finally {
+      btn.disabled = false;
+    }
   });
 })();
