@@ -22,4 +22,29 @@ a:hover{text-decoration:underline}
 
 .container{max-width:1100px;margin:28px auto;padding:0 16px}
 .card{background:rgba(17,24,39,.85);border:1px solid #1f2937;border-radius:var(--radius);box-shadow:var(--shadow);padding:22px}
-.title{margin:0 0 14px 0;font-size:
+.title{margin:0 0 14px 0;font-size:22px}
+.subtitle{font-size:18px;margin-top:20px}
+
+.grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px}
+.grid label{display:flex;flex-direction:column;font-size:14px;gap:6px;color:#cbd5e1}
+.grid input,.grid select{background:#0b1020;border:1px solid #1f2937;color:var(--text);padding:10px;border-radius:12px;outline:none}
+.grid input:focus,.grid select:focus{border-color:#334155}
+.grid .full{grid-column:1/-1}
+
+.btn-primary{background:var(--primary);border:none;color:white;padding:10px 16px;border-radius:12px;cursor:pointer}
+.btn-primary:hover{background:var(--primary-2)}
+.btn-danger{background:var(--danger);border:none;color:white;padding:8px 12px;border-radius:10px;cursor:pointer}
+
+.alert{background:#3f1d1d;border:1px solid #7f1d1d;color:#fecaca;padding:10px;border-radius:10px;margin-bottom:10px}
+.muted{color:var(--muted);margin-left:12px}
+
+.drop{margin-top:8px;border:2px dashed #334155;border-radius:12px;padding:18px;text-align:center;color:var(--muted)}
+.drop.hover{background:#0b1224}
+.preview{display:flex;gap:10px;flex-wrap:wrap;margin-top:12px}
+.thumb{width:90px;height:90px;object-fit:cover;border-radius:10px;border:1px solid #1f2937}
+
+.table{width:100%;border-collapse:collapse;margin-top:12px}
+.table th,.table td{border-bottom:1px solid #1f2937;padding:8px;text-align:left}
+
+.footer{text-align:center;color:#94a3b8;margin:30px 0 20px}
+@media (max-width:800px){ .grid{grid-template-columns:1fr} }
