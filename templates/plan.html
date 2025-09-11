@@ -1,0 +1,58 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="card p-lg">
+  <div class="flex between center mb-md">
+    <h1 class="h2">Instagram Planı Oluştur</h1>
+  </div>
+
+  <form id="plan-form" method="post" action="/generate" enctype="multipart/form-data">
+    <div class="grid-3">
+      <label class="form-field">
+        <span>Otel adı</span>
+        <input name="otel_adi" required placeholder="Örn: Blue Coast Hotel" />
+      </label>
+
+      <label class="form-field">
+        <span>Otel iletişim bilgisi</span>
+        <input name="iletisim" placeholder="Telefon, e-posta, adres…" />
+      </label>
+
+      <label class="form-field">
+        <span>Başlangıç tarihi</span>
+        <input name="baslangic_tarihi" type="date" required />
+      </label>
+
+      <label class="form-field">
+        <span>Kaç günde bir paylaşılsın?</span>
+        <input name="tekrar_gunu" type="number" min="1" value="1" />
+      </label>
+
+      <label class="form-field">
+        <span>Çıkacak Word dosya adı</span>
+        <input name="dosya_adi" placeholder="Instagram_Plani.docx" />
+      </label>
+
+      <label class="form-field">
+        <span>Hızlı ay seçimi (opsiyonel)</span>
+        <select id="month-quick" data-target="input[name='baslangic_tarihi']">
+          <option value="">— Seçiniz —</option>
+        </select>
+      </label>
+    </div>
+
+    <div class="uploader mt-md" data-uploader>
+      <input id="images" class="sr-only" type="file" name="images" accept="image/*" multiple required />
+      <div class="uploader-drop" data-drop>
+        <p class="mb-sm"><strong>Görselleri</strong> buraya sürükleyip bırakın ya da</p>
+        <button type="button" class="btn ghost" data-browse>Dosya Seç</button>
+        <div class="hint mt-sm">Yükledikten sonra küçük önizlemeleri burada göreceksiniz.</div>
+      </div>
+      <div class="thumbs mt-md" id="thumbs" data-thumbs></div>
+    </div>
+
+    <div class="mt-lg flex end">
+      <button class="btn primary" id="submit-btn">Planı Oluştur</button>
+    </div>
+  </form>
+</section>
+{% endblock %}
