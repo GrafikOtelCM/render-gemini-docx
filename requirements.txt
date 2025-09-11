@@ -11,7 +11,6 @@ pillow==10.4.0
 python-docx==1.1.2
 openpyxl==3.1.5
 lxml==6.0.1
-pydantic==2.11.7
 itsdangerous==2.2.0
 watchfiles==1.1.0
 PyYAML==6.0.2
@@ -22,3 +21,4 @@ websockets==15.0.1
 uvloop==0.21.0
 httptools==0.6.4
 google-generativeai==0.7.2
+pillow-heif==0.18.0
