@@ -1,29 +1,46 @@
 {% extends "base.html" %}
 {% block content %}
-<section class="card p-lg">
-  <div class="flex between center mb-md">
-    <h1 class="h2">Admin Panel</h1>
-    <a class="btn ghost" href="/plan">Plan Oluştur</a>
-  </div>
+<div class="card">
+  <h1 class="title">Admin • Kullanıcılar</h1>
 
-  <div class="table-wrap">
-    <table class="table">
-      <thead>
-        <tr>
-          <th>ID</th><th>Kullanıcı</th><th>Rol</th><th>Oluşturma</th>
-        </tr>
-      </thead>
-      <tbody>
-        {% for r in rows %}
-        <tr>
-          <td>{{ r[0] }}</td>
-          <td>{{ r[1] }}</td>
-          <td><span class="tag">{{ r[2] }}</span></td>
-          <td>{{ r[3] }}</td>
-        </tr>
-        {% endfor %}
-      </tbody>
-    </table>
-  </div>
-</section>
+  <form method="post" action="/admin/users/create" class="grid">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <label>Kullanıcı adı
+      <input name="username" required>
+    </label>
+    <label>Şifre
+      <input name="password" type="password" required>
+    </label>
+    <label>Rol
+      <select name="role">
+        <option value="user">user</option>
+        <option value="admin">admin</option>
+      </select>
+    </label>
+    <button class="btn-primary" type="submit">Oluştur</button>
+  </form>
+
+  <h2 class="subtitle">Mevcut kullanıcılar</h2>
+  <table class="table">
+    <thead><tr><th>ID</th><th>Kullanıcı</th><th>Rol</th><th>Oluşturulma</th><th></th></tr></thead>
+    <tbody>
+      {% for u in users %}
+      <tr>
+        <td>{{ u.id }}</td>
+        <td>{{ u.username }}</td>
+        <td>{{ u.role }}</td>
+        <td>{{ u.created_at }}</td>
+        <td>
+          {% if u.username != 'admin' %}
+          <form method="post" action="/admin/users/{{ u.id }}/delete" onsubmit="return confirm('Silinsin mi?')" style="display:inline;">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+            <button class="btn-danger" type="submit">Sil</button>
+          </form>
+          {% endif %}
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
 {% endblock %}
