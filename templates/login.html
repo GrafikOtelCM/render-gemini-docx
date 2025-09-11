@@ -1,25 +1,19 @@
 {% extends "base.html" %}
 {% block content %}
-<section class="card card-padded max-w-480 mx-auto">
-  <h1 class="h1 mb-1">Giriş Yap</h1>
-  <p class="muted mb-4">Lütfen kullanıcı adı ve şifrenizi girin.</p>
-
-  <form action="/login" method="post" class="stack gap-3">
-    <label class="field">
-      <span class="label">Kullanıcı Adı</span>
-      <input name="username" type="text" placeholder="kullanici" required />
+<section class="card p-lg">
+  <h1 class="h2 mb-md">Giriş Yap</h1>
+  <form method="post" action="/login" class="grid-2">
+    <label class="form-field">
+      <span>Kullanıcı adı</span>
+      <input name="username" required placeholder="kullanici" />
     </label>
-
-    <label class="field">
-      <span class="label">Şifre</span>
-      <input name="password" type="password" placeholder="••••••••" required />
+    <label class="form-field">
+      <span>Şifre</span>
+      <input name="password" type="password" required placeholder="••••••••" />
     </label>
-
-    <button class="btn btn-primary w-full" type="submit">Giriş Yap</button>
+    <div class="col-span-2 mt-sm">
+      <button class="btn primary">Giriş</button>
+    </div>
   </form>
-
-  <p class="muted mt-4 small">
-    Admin hesabı yoksa .env / Render env ile <code>ADMIN_CODE_USER</code> & <code>ADMIN_CODE_PASS</code> tanımlayın.
-  </p>
 </section>
 {% endblock %}
