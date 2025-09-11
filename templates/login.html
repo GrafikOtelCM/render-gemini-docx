@@ -1,19 +1,17 @@
 {% extends "base.html" %}
 {% block content %}
-<section class="card p-lg">
-  <h1 class="h2 mb-md">Giriş Yap</h1>
-  <form method="post" action="/login" class="grid-2">
-    <label class="form-field">
-      <span>Kullanıcı adı</span>
-      <input name="username" required placeholder="kullanici" />
+<div class="card">
+  <h1 class="title">Giriş Yap</h1>
+  {% if error %}<div class="alert">{{ error }}</div>{% endif %}
+  <form method="post" action="/login" class="grid">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <label>Kullanıcı adı
+      <input name="username" placeholder="admin" required>
     </label>
-    <label class="form-field">
-      <span>Şifre</span>
-      <input name="password" type="password" required placeholder="••••••••" />
+    <label>Şifre
+      <input name="password" type="password" placeholder="••••••••" required>
     </label>
-    <div class="col-span-2 mt-sm">
-      <button class="btn primary">Giriş</button>
-    </div>
+    <button class="btn-primary" type="submit">Giriş</button>
   </form>
-</section>
+</div>
 {% endblock %}
