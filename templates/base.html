@@ -3,38 +3,29 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>{{ app_name or "Otel Planlama Stüdyosu" }}</title>
-  <link rel="stylesheet" href="/static/css/app.css">
-  <script defer src="/static/js/app.js"></script>
+  <title>{{ app_name }}</title>
+  <link rel="stylesheet" href="/static/css/app.css" />
 </head>
-<body class="app-body">
-  <header class="app-header">
-    <div class="container flex between center">
-      <div class="brand">
-        <a href="/plan" class="brand-link">{{ app_name or "Otel Planlama Stüdyosu" }}</a>
-      </div>
-      <nav class="nav">
-        <a class="nav-link" href="/plan">Plan Oluştur</a>
-        <a class="nav-link" href="/admin">Admin</a>
-        {% if request and request.session and request.session.get('user') %}
-        <form method="post" action="/logout" class="inline">
-          <button class="btn ghost">Çıkış</button>
-        </form>
-        {% else %}
-        <a class="btn ghost" href="/login">Giriş</a>
-        {% endif %}
-      </nav>
-    </div>
+<body class="bg">
+  <header class="nav">
+    <a class="brand" href="/plan">Otel Planlama Stüdyosu</a>
+    <nav class="links">
+      <a href="/plan">Plan Oluştur</a>
+      <a href="/admin">Admin</a>
+      {% if request.session.get("user") %}
+      <form method="post" action="/logout" style="display:inline;">
+        <input type="hidden" name="csrf_token" value="{{ request.session.get('csrf_token') }}">
+        <button class="btn-out" type="submit">Çıkış</button>
+      </form>
+      {% endif %}
+    </nav>
   </header>
 
-  <main class="container page">
+  <main class="container">
     {% block content %}{% endblock %}
   </main>
 
-  <footer class="app-footer">
-    <div class="container small">
-      <span>© {{ (now() if now else '') or '' }} {{ app_name or "Otel Planlama Stüdyosu" }}</span>
-    </div>
-  </footer>
+  <footer class="footer">© {{ now().year if now else '' }} {{ app_name }}</footer>
+  <script src="/static/js/app.js" defer></script>
 </body>
 </html>
