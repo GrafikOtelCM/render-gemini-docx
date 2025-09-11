@@ -1,176 +1,91 @@
-(function () {
-  const $ = (s, r = document) => r.querySelector(s);
-  const $$ = (s, r = document) => Array.from(r.querySelectorAll(s));
-  const toast = (msg, type = "info") => {
-    const el = $("#toast");
-    el.textContent = msg;
-    el.className = "toast " + (type === "success" ? "alert-success" : type === "danger" ? "alert-danger" : "");
-    el.hidden = false;
-    setTimeout(() => (el.hidden = true), 3500);
-  };
+// Hızlı ay seçimi: açılır listede içinde bulunduğumuz ay + 5 ay daha
+(function setupMonthQuick() {
+  const sel = document.querySelector('#month-quick');
+  if (!sel) return;
+  const targetSel = sel.getAttribute('data-target');
+  const target = document.querySelector(targetSel);
+  if (!target) return;
 
-  // --- Dropzone & thumbs ---
-  const dz = $("#dropzone");
-  const pick = $("#pick-images");
-  const input = $("#images");
-  const thumbs = $("#thumbs");
-  let files = [];
+  const today = new Date();
+  for (let i = -1; i <= 6; i++) {
+    const d = new Date(today.getFullYear(), today.getMonth() + i, 1);
+    const val = d.toISOString().slice(0,10); // YYYY-MM-01
+    const name = d.toLocaleDateString('tr-TR', { month:'long', year:'numeric' });
+    const opt = document.createElement('option');
+    opt.value = val; opt.textContent = name.charAt(0).toUpperCase() + name.slice(1);
+    sel.appendChild(opt);
+  }
+  sel.addEventListener('change', () => {
+    if (sel.value) target.value = sel.value;
+  });
+})();
 
-  function renderThumbs() {
-    thumbs.innerHTML = "";
-    if (!files.length) {
-      thumbs.innerHTML = `<p class="muted small">Seçili görsel yok.</p>`;
-      return;
-    }
-    files.forEach((f, idx) => {
-      const url = URL.createObjectURL(f);
-      const item = document.createElement("div");
-      item.className = "thumb";
-      item.innerHTML = `<img src="${url}" alt="${f.name}"><button class="x" data-i="${idx}">×</button>`;
-      thumbs.appendChild(item);
+// Sürükle-bırak çoklu görsel önizleme (küçük kutular)
+(function setupUploader(){
+  const zone = document.querySelector('[data-uploader]');
+  if (!zone) return;
+
+  const fileInput = zone.querySelector('input[type="file"]');
+  const drop = zone.querySelector('[data-drop]');
+  const thumbs = zone.querySelector('[data-thumbs]');
+  const browseBtn = zone.querySelector('[data-browse]');
+
+  const dataTransfer = new DataTransfer();
+
+  function renderThumb(file, idx){
+    const url = URL.createObjectURL(file);
+    const item = document.createElement('div');
+    item.className = 'thumb';
+    item.innerHTML = `<img src="${url}" alt="">
+      <button type="button" class="del">Sil</button>`;
+    const btn = item.querySelector('.del');
+    btn.addEventListener('click', () => {
+      // listeden çıkar
+      const files = Array.from(dataTransfer.files);
+      files.splice(idx,1);
+      const dt = new DataTransfer();
+      files.forEach(f => dt.items.add(f));
+      fileInput.files = dt.files;
+      thumbs.innerHTML = '';
+      Array.from(fileInput.files).forEach((f,i)=> renderThumb(f,i));
     });
+    thumbs.appendChild(item);
   }
-  function addFiles(list) {
-    for (const f of list) if (f && f.type.startsWith("image/")) files.push(f);
-    renderThumbs();
-  }
-  thumbs.addEventListener("click", (e) => {
-    if (e.target.matches(".x")) {
-      const i = +e.target.dataset.i;
-      files.splice(i, 1);
-      renderThumbs();
-    }
-  });
-  if (dz) {
-    ["dragenter","dragover"].forEach(ev => dz.addEventListener(ev, e => { e.preventDefault(); dz.classList.add("drag"); }));
-    ["dragleave","drop"].forEach(ev => dz.addEventListener(ev, e => { e.preventDefault(); dz.classList.remove("drag"); }));
-    dz.addEventListener("drop", (e) => addFiles(e.dataTransfer.files));
-  }
-  if (pick && input) {
-    pick.addEventListener("click", () => input.click());
-    input.addEventListener("change", () => addFiles(input.files));
-  }
-  renderThumbs();
 
-  // --- Plan form submit (JSON API varsa /api/plan’ı dener, yoksa /plan’a POST eder) ---
-  const planForm = $("#plan-form");
-  if (planForm) {
-    planForm.addEventListener("submit", async (e) => {
-      e.preventDefault();
-
-      const data = new FormData();
-      $$("input, select, textarea", planForm).forEach(el => {
-        if (!el.name) return;
-        if (el.type === "file") return;
-        data.append(el.name, el.value);
-      });
-      files.forEach(f => data.append("images", f, f.name));
-
-      const results = $("#results");
-      results.innerHTML = `<p class="muted">İşleniyor…</p>`;
-
-      // Önce /api/plan’ı dene
-      let ok = false;
-      if (window.__PLAN_ENDPOINTS__?.prefer) {
-        try {
-          const r = await fetch(window.__PLAN_ENDPOINTS__.prefer, { method: "POST", body: data, credentials: "include" });
-          if (r.ok) {
-            const j = await r.json();
-            ok = true;
-            paintResult(j);
-            toast("Plan hazırlandı.", "success");
-          }
-        } catch {}
-      }
-      // Olmadıysa /plan’a form-post dene
-      if (!ok && window.__PLAN_ENDPOINTS__?.fallback) {
-        try {
-          const r = await fetch(window.__PLAN_ENDPOINTS__.fallback, { method: "POST", body: data, credentials: "include" });
-          if (r.ok) {
-            const j = await r.json().catch(() => null);
-            paintResult(j || { message: "Plan hazırlandı." });
-            toast("Plan hazırlandı.", "success");
-            ok = true;
-          }
-        } catch {}
-      }
-      if (!ok) {
-        results.innerHTML = `<p class="muted">Bir hata oluştu.</p>`;
-        toast("Hata: Plan oluşturulamadı.", "danger");
-      }
+  function appendFiles(list){
+    const current = Array.from(dataTransfer.files);
+    Array.from(list).forEach(f => {
+      if (!f.type.startsWith('image/')) return;
+      current.push(f);
     });
-
-    function paintResult(j) {
-      const results = $("#results");
-      const links = [];
-      if (j?.docx_url) links.push(`<a class="btn btn-primary" href="${j.docx_url}">DOCX indir</a>`);
-      if (j?.xlsx_url) links.push(`<a class="btn" href="${j.xlsx_url}">Excel indir</a>`);
-      if (!links.length) {
-        results.innerHTML = `<div class="card card-padded"><pre>${escapeHTML(JSON.stringify(j, null, 2))}</pre></div>`;
-      } else {
-        results.innerHTML = `<div class="stack gap-2">
-          <p class="muted">Çıktılar hazır:</p>
-          <div class="flex gap-2">${links.join("")}</div>
-        </div>`;
-      }
-    }
+    const dt = new DataTransfer();
+    current.forEach(f => dt.items.add(f));
+    fileInput.files = dt.files;
+    thumbs.innerHTML = '';
+    Array.from(fileInput.files).forEach((f,i)=> renderThumb(f,i));
   }
 
-  // --- Admin sayfası: listele / ekle / sil ---
-  const userRows = $("#user-rows");
-  async function loadUsers() {
-    if (!userRows) return;
-    userRows.innerHTML = `<tr><td colspan="5" class="muted">Yükleniyor…</td></tr>`;
-    try {
-      const r = await fetch(window.__ADMIN_ENDPOINTS__?.list || "/admin/users", { credentials: "include" });
-      const j = await r.json();
-      if (!Array.isArray(j) || !j.length) {
-        userRows.innerHTML = `<tr><td colspan="5" class="muted">Kayıt yok.</td></tr>`;
-        return;
-      }
-      userRows.innerHTML = j.map(u => `
-        <tr>
-          <td>${u.id}</td>
-          <td>${escapeHTML(u.username)}</td>
-          <td>${u.role}</td>
-          <td>${u.created_at || "-"}</td>
-          <td><button class="btn small" data-del="${u.id}">Sil</button></td>
-        </tr>
-      `).join("");
-    } catch {
-      userRows.innerHTML = `<tr><td colspan="5" class="muted">Liste alınamadı.</td></tr>`;
-    }
-  }
-  $("#refresh-users")?.addEventListener("click", loadUsers);
-  document.addEventListener("click", async (e) => {
-    const id = e.target?.dataset?.del;
-    if (!id) return;
-    if (!confirm("Silmek istediğinize emin misiniz?")) return;
-    try {
-      const r = await fetch((window.__ADMIN_ENDPOINTS__?.remove?.(id)) || `/admin/users/${id}`, { method: "DELETE", credentials: "include" });
-      if (r.ok) { toast("Silindi", "success"); loadUsers(); } else toast("Silinemedi", "danger");
-    } catch { toast("Silinemedi", "danger"); }
-  });
-  $("#user-form")?.addEventListener("submit", async (e) => {
-    e.preventDefault();
-    const fd = new FormData(e.currentTarget);
-    const payload = Object.fromEntries(fd.entries());
-    try {
-      const r = await fetch(window.__ADMIN_ENDPOINTS__?.create || "/admin/users", {
-        method: "POST",
-        headers: {"Content-Type":"application/json"},
-        body: JSON.stringify(payload),
-        credentials: "include"
-      });
-      if (r.ok) {
-        e.currentTarget.reset();
-        toast("Kullanıcı eklendi", "success");
-        loadUsers();
-      } else toast("Eklenemedi", "danger");
-    } catch { toast("Eklenemedi", "danger"); }
-  });
-  loadUsers();
+  browseBtn?.addEventListener('click', () => fileInput.click());
+  fileInput.addEventListener('change', e => appendFiles(e.target.files));
 
-  // Utils
-  function escapeHTML(s){return String(s).replace(/[&<>"'`=\/]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;','/':'&#x2F;','`':'&#x60;','=':'&#x3D;'}[c]))}
+  ;['dragenter','dragover'].forEach(ev => {
+    drop.addEventListener(ev, e => { e.preventDefault(); drop.classList.add('drag'); });
+  });
+  ;['dragleave','drop'].forEach(ev => {
+    drop.addEventListener(ev, e => { e.preventDefault(); drop.classList.remove('drag'); });
+  });
+  drop.addEventListener('drop', e => {
+    const files = e.dataTransfer?.files;
+    if (files && files.length) appendFiles(files);
+  });
+})();
+
+// Form gönderiminde butonu kilitle (çoklu tıklama önle)
+(function protectSubmit(){
+  const form = document.getElementById('plan-form');
+  if (!form) return;
+  const btn = document.getElementById('submit-btn');
+  form.addEventListener('submit', () => {
+    if (btn){ btn.disabled = true; btn.textContent = 'Oluşturuluyor…'; }
+  });
 })();
