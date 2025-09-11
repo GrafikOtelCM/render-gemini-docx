@@ -2,40 +2,39 @@
 <html lang="tr">
 <head>
   <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>{{ title or "Otel Planlama Stüdyosu" }}</title>
-  <link rel="stylesheet" href="{{ url_for('static', path='css/app.css') }}">
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>{{ app_name or "Otel Planlama Stüdyosu" }}</title>
+  <link rel="stylesheet" href="/static/css/app.css">
+  <script defer src="/static/js/app.js"></script>
 </head>
-<body class="theme">
-  <header class="topbar">
-    <div class="container topbar-inner">
-      <a href="/" class="brand">
-        <span class="logo-dot"></span>
-        <span class="brand-text">{{ app_name or "Otel Planlama Stüdyosu" }}</span>
-      </a>
+<body class="app-body">
+  <header class="app-header">
+    <div class="container flex between center">
+      <div class="brand">
+        <a href="/plan" class="brand-link">{{ app_name or "Otel Planlama Stüdyosu" }}</a>
+      </div>
       <nav class="nav">
-        <a href="/" class="nav-link">Plan Oluştur</a>
-        {% if user and user.role == 'admin' %}
-          <a href="/admin" class="nav-link">Admin</a>
-        {% endif %}
-        {% if user %}
-          <form class="inline" action="/logout" method="post">
-            <button class="btn btn-ghost" type="submit">Çıkış</button>
-          </form>
+        <a class="nav-link" href="/plan">Plan Oluştur</a>
+        <a class="nav-link" href="/admin">Admin</a>
+        {% if request and request.session and request.session.get('user') %}
+        <form method="post" action="/logout" class="inline">
+          <button class="btn ghost">Çıkış</button>
+        </form>
         {% else %}
-          <a href="/login" class="btn btn-ghost">Giriş</a>
+        <a class="btn ghost" href="/login">Giriş</a>
         {% endif %}
       </nav>
     </div>
   </header>
 
-  <main class="container py-6">
+  <main class="container page">
     {% block content %}{% endblock %}
   </main>
 
-  <div id="toast" class="toast" hidden></div>
-
-  <script src="{{ url_for('static', path='js/app.js') }}"></script>
-  {% block scripts %}{% endblock %}
+  <footer class="app-footer">
+    <div class="container small">
+      <span>© {{ (now() if now else '') or '' }} {{ app_name or "Otel Planlama Stüdyosu" }}</span>
+    </div>
+  </footer>
 </body>
 </html>
