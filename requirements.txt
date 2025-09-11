@@ -1,22 +1,20 @@
 fastapi==0.112.0
 uvicorn==0.30.6
 gunicorn==22.0.0
+
 jinja2==3.1.4
 python-multipart==0.0.9
-pydantic==2.11.7
-starlette==0.37.2
-Pillow==10.4.0
 python-docx==1.1.2
+Pillow==10.4.0
+itsdangerous==2.2.0
+
+# auth
+passlib==1.7.4
+bcrypt==3.2.2
+
+# opsiyonel/yardımcılar
+httpx==0.27.2
+python-dotenv==1.1.1
 openpyxl==3.1.5
 lxml==6.0.1
-httpx==0.27.2
-requests==2.32.3
-python-dotenv==1.1.1
-passlib==1.7.4
-bcrypt==4.1.3
-itsdangerous==2.2.0
 PyYAML==6.0.2
-typing-inspection==0.4.1
-typing_extensions==4.15.0
-# Gemini resmi SDK
-google-generativeai==0.7.2
