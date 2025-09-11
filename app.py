@@ -1,44 +1,49 @@
-import io
 import os
-import json
+import io
 import sqlite3
 from datetime import datetime, timedelta
-from typing import Optional, List
+from typing import List, Optional
 
 from fastapi import FastAPI, Request, Form, UploadFile, File, HTTPException
-from fastapi.responses import RedirectResponse, StreamingResponse, JSONResponse, HTMLResponse
+from fastapi.responses import RedirectResponse, StreamingResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from starlette.middleware.sessions import SessionMiddleware
-from starlette.status import HTTP_303_SEE_OTHER, HTTP_307_TEMPORARY_REDIRECT
+from starlette.status import HTTP_303_SEE_OTHER
 
-from PIL import Image
+from PIL import Image, ImageOps
 from docx import Document
 from docx.shared import Inches
 
-# ---- Gemini (opsiyonel) ----
-GEMINI_AVAILABLE = False
-try:
-    import google.generativeai as genai  # type: ignore
-    GEMINI_AVAILABLE = True
-except Exception:
-    GEMINI_AVAILABLE = False
-
-
-# =========================
-# Ayarlar
-# =========================
+# ---------- Config ----------
 APP_NAME = os.getenv("APP_NAME", "Otel Planlama Stüdyosu")
 SECRET_KEY = os.getenv("SECRET_KEY", "dev-secret-change-this")
-USAGE_DB_PATH = os.getenv("USAGE_DB_PATH", "/tmp/usage.db")
-
+USERS_DB = os.getenv("USERS_DB_PATH", "/tmp/users.db")
+USAGE_DB_PATH = os.getenv("USAGE_DB_PATH", "/tmp/usage.db")  # sadece log için
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY") or os.getenv("GeminiAPI")
-GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
+GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-1.5-flash")
 
-# =========================
-# App & Static & Templates
-# =========================
-app = FastAPI()
+# HEIC/HEIF desteği
+HEIF_OK = False
+try:
+    from pillow_heif import register_heif_opener  # type: ignore
+    register_heif_opener()
+    HEIF_OK = True
+except Exception:
+    HEIF_OK = False
+
+# Gemini opsiyonel
+GEMINI_OK = False
+try:
+    import google.generativeai as genai  # type: ignore
+    if GEMINI_API_KEY:
+        genai.configure(api_key=GEMINI_API_KEY)
+        GEMINI_OK = True
+except Exception:
+    GEMINI_OK = False
+
+# ---------- App ----------
+app = FastAPI(title=APP_NAME)
 app.add_middleware(SessionMiddleware, secret_key=SECRET_KEY, same_site="lax")
 
 os.makedirs("static/css", exist_ok=True)
@@ -49,372 +54,323 @@ app.mount("/static", StaticFiles(directory="static"), name="static")
 templates = Jinja2Templates(directory="templates")
 templates.env.globals["app_name"] = APP_NAME
 
-
-# =========================
-# Yardımcılar: DB & Auth
-# =========================
-def db_conn():
-    conn = sqlite3.connect(USAGE_DB_PATH)
-    conn.row_factory = sqlite3.Row
-    return conn
-
-
-def init_db():
-    with db_conn() as con:
-        cur = con.cursor()
-        # Düz metin parola (istenildiği gibi)
-        cur.execute(
-            """
-            CREATE TABLE IF NOT EXISTS users(
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                username TEXT UNIQUE NOT NULL,
-                password TEXT NOT NULL,
-                role TEXT NOT NULL DEFAULT 'user',
-                created_at TEXT NOT NULL
-            );
-            """
-        )
-        con.commit()
-
-        # Admin varsa dokunma, yoksa tohumla
+# ---------- DB (users) ----------
+def db():
+    conn = sqlite3.connect(USERS_DB)
+    conn.execute(
+        """CREATE TABLE IF NOT EXISTS users(
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            username TEXT UNIQUE,
+            password TEXT,
+            role TEXT DEFAULT 'user',
+            created_at TEXT
+        )"""
+    )
+    # default admin
+    cur = conn.execute("SELECT COUNT(*) FROM users WHERE role='admin'")
+    if cur.fetchone()[0] == 0:
         admin_user = os.getenv("ADMIN_CODE_USER", "admin")
         admin_pass = os.getenv("ADMIN_CODE_PASS", "admin123")
-        cur.execute("SELECT id FROM users WHERE username=?", (admin_user,))
-        row = cur.fetchone()
-        if not row:
-            cur.execute(
-                "INSERT INTO users(username, password, role, created_at) VALUES(?,?,?,?)",
-                (admin_user, admin_pass, "admin", datetime.utcnow().isoformat(timespec="seconds")),
-            )
-            con.commit()
+        conn.execute(
+            "INSERT OR IGNORE INTO users(username,password,role,created_at) VALUES(?,?,?,?)",
+            (admin_user, admin_pass, "admin", datetime.utcnow().isoformat()),
+        )
+        conn.commit()
+    return conn
 
+# ---------- Helpers ----------
+def get_user(req: Request):
+    return req.session.get("user")
 
-@app.on_event("startup")
-def on_startup():
-    init_db()
-    if GEMINI_AVAILABLE and GEMINI_API_KEY:
-        try:
-            genai.configure(api_key=GEMINI_API_KEY)
-        except Exception:
-            pass
-    print(f"[INFO] Using DB at: {USAGE_DB_PATH}")
-
-
-def ensure_csrf(request: Request) -> str:
-    token = request.session.get("csrf_token")
-    if not token:
-        import secrets
-
-        token = secrets.token_urlsafe(32)
-        request.session["csrf_token"] = token
-    return token
-
-
-def verify_csrf(request: Request, token_from_form: str):
-    token = request.session.get("csrf_token")
-    if not token or (token_from_form or "").strip() != token:
-        raise HTTPException(status_code=400, detail="CSRF doğrulaması başarısız")
-
-
-def session_user(request: Request) -> Optional[dict]:
-    return request.session.get("user")
-
-
-def require_login(request: Request) -> dict:
-    u = session_user(request)
+def require_login(req: Request) -> Optional[RedirectResponse]:
+    u = get_user(req)
     if not u:
-        # 307 ile login'e yönlendir
-        raise HTTPException(status_code=HTTP_307_TEMPORARY_REDIRECT, detail="login", headers={"Location": "/login"})
-    return u
+        return RedirectResponse(url="/login", status_code=HTTP_303_SEE_OTHER)
+    return None
 
+def require_admin(req: Request) -> Optional[RedirectResponse]:
+    u = get_user(req)
+    if not u or u.get("role") != "admin":
+        return RedirectResponse(url="/login", status_code=HTTP_303_SEE_OTHER)
+    return None
 
-def require_admin(request: Request) -> dict:
-    u = require_login(request)
-    if u.get("role") != "admin":
-        raise HTTPException(status_code=403, detail="Yetkisiz")
-    return u
+def guess_extension(content_type: str) -> str:
+    if not content_type:
+        return ".jpg"
+    if "png" in content_type:
+        return ".png"
+    if "webp" in content_type:
+        return ".webp"
+    if "heic" in content_type or "heif" in content_type:
+        return ".heic"
+    return ".jpg"
 
-
-# =========================
-# Rotalar (UI)
-# =========================
-@app.get("/", response_class=HTMLResponse)
-def index(request: Request):
-    if session_user(request):
-        return RedirectResponse("/plan", status_code=HTTP_303_SEE_OTHER)
-    return RedirectResponse("/login", status_code=HTTP_303_SEE_OTHER)
-
-
-@app.get("/login", response_class=HTMLResponse)
-def login_page(request: Request):
-    ctx = {"request": request, "csrf_token": ensure_csrf(request), "error": None}
-    return templates.TemplateResponse("login.html", ctx)
-
-
-@app.post("/login")
-def login_submit(
-    request: Request,
-    username: str = Form(...),
-    password: str = Form(...),
-    csrf_token: str = Form(...)
-):
+def open_image_safely(data: bytes) -> Image.Image:
+    """
+    Her tür görüntüyü Pillow ile aç; EXIF düzeltmesi yap;
+    alfa varsa beyaza merge et.
+    """
+    img = Image.open(io.BytesIO(data))
     try:
-        verify_csrf(request, csrf_token)
-    except HTTPException:
-        ctx = {"request": request, "csrf_token": ensure_csrf(request), "error": "Oturum doğrulaması başarısız."}
-        return templates.TemplateResponse("login.html", ctx, status_code=400)
+        img = ImageOps.exif_transpose(img)
+    except Exception:
+        pass
+    if img.mode in ("RGBA", "LA"):
+        bg = Image.new("RGB", img.size, (255, 255, 255))
+        bg.paste(img, mask=img.split()[-1])
+        img = bg
+    elif img.mode != "RGB":
+        img = img.convert("RGB")
+    return img
 
-    with db_conn() as con:
-        cur = con.cursor()
-        cur.execute("SELECT id, username, password, role FROM users WHERE username=?", (username,))
-        row = cur.fetchone()
+def add_image_to_doc(doc: Document, data: bytes, max_width_inch: float = 6.0):
+    img = open_image_safely(data)
+    # genişlik sınırla
+    w, h = img.size
+    max_width_px = int(max_width_inch * 96)  # 96 dpi
+    if w > max_width_px:
+        ratio = max_width_px / float(w)
+        new_size = (max_width_px, int(h * ratio))
+        img = img.resize(new_size, Image.LANCZOS)
+    buf = io.BytesIO()
+    img.save(buf, format="JPEG", quality=88)
+    buf.seek(0)
+    doc.add_picture(buf, width=Inches(max_width_inch))
 
-    if not row or str(row["password"]) != password:
-        ctx = {"request": request, "csrf_token": ensure_csrf(request), "error": "Kullanıcı adı / şifre hatalı."}
-        return templates.TemplateResponse("login.html", ctx, status_code=401)
+EMOJIS = ["✨", "🏖️", "🌅", "🌊", "🌿", "🧳", "📷", "🌞", "💫", "🍹", "🌙", "🏨", "💙"]
 
-    request.session["user"] = {"id": row["id"], "username": row["username"], "role": row["role"]}
+def fallback_caption_and_tags(index: int, hotel_info: str) -> (str, str):
+    # Basit, emojili yerel üretim
+    base = [
+        "Denizin sesi, gün batımının sıcaklığı 🌅🌊",
+        "Yeni anılar biriktirme zamanı 🧳✨",
+        "Sakinlik ve konfor bir arada 🏨🌿",
+        "Tatil modunu açma vakti 🌞🍹",
+        "Fotoğraf gibi kareler 📷💫",
+    ]
+    text = base[index % len(base)]
+    if hotel_info:
+        text += f"  {hotel_info}"
+    tags = "#otel #tatil #konfor #deniz #günbatımı #holiday #travel #relax"
+    return text, tags
+
+async def gemini_caption_and_tags(image_bytes: bytes, hotel_info: str) -> (str, str):
+    if not GEMINI_OK:
+        return fallback_caption_and_tags(0, hotel_info)
+    try:
+        model = genai.GenerativeModel(GEMINI_MODEL)
+        prompt = (
+            "Aşağıdaki fotoğrafı analiz et ve görsele TAM olarak uygun, "
+            "Türkçe, 1-2 cümlelik, sıcak ve çekici bir Instagram açıklaması yaz. "
+            "Açıklama mutlaka EMOJİ içersin. "
+            "Ardından en sona tek satırda 8-12 kısa hashtag yaz (mekân ve tatil odaklı). "
+            "Hiçbir başlık (Açıklama/Hashtag) kullanma, sadece iki satır üret: "
+            "1. satır açıklama (emojili), 2. satır hashtagler. "
+            f"Otelle ilgili şu bilgiyi doğalca açıklamaya yedir: {hotel_info or '—'}"
+        )
+        img_part = {"mime_type": "image/jpeg", "data": image_bytes}
+        res = await model.generate_content_async([prompt, img_part])
+        text = (res.text or "").strip()
+        # iki satıra ayırmaya çalış
+        parts = [p.strip() for p in text.splitlines() if p.strip()]
+        if len(parts) >= 2:
+            cap = parts[0]
+            tags = parts[1]
+        else:
+            cap, tags = fallback_caption_and_tags(0, hotel_info)
+        # emojisiz kaldıysa min 1 emoji enjekte et
+        if not any(e in cap for e in EMOJIS):
+            cap = cap + " " + EMOJIS[0]
+        return cap, tags
+    except Exception:
+        return fallback_caption_and_tags(0, hotel_info)
+
+def write_plan_docx(
+    images: List[bytes],
+    start_date: datetime,
+    every_n_days: int,
+    hotel_info: str,
+    title: str,
+    captions: List[str],
+    tags_list: List[str],
+) -> bytes:
+    """
+    Her sayfa:
+      [Paylaşım Tarihi]
+      [Görsel]
+      [Açıklama (emojili, başlıksız)]
+      [Otel iletişim (başlıksız)]
+      [Hashtag (tek satır, başlıksız)]
+    """
+    doc = Document()
+    for i, img in enumerate(images):
+        share_date = (start_date + timedelta(days=i * every_n_days)).strftime("%d.%m.%Y")
+        # Tarih (üstte)
+        p_date = doc.add_paragraph(share_date)
+        p_date.runs[0].bold = True
+
+        # Görsel
+        add_image_to_doc(doc, img, max_width_inch=6.0)
+        doc.add_paragraph("")  # boşluk
+
+        # Açıklama
+        doc.add_paragraph(captions[i])
+
+        # Otel iletişim (etiketsiz)
+        if hotel_info:
+            doc.add_paragraph(hotel_info)
+
+        # Hashtag (tek satır)
+        doc.add_paragraph(tags_list[i])
+
+        # Sayfa sonu (son sayfa hariç)
+        if i < len(images) - 1:
+            doc.add_page_break()
+
+    bio = io.BytesIO()
+    doc.save(bio)
+    bio.seek(0)
+    return bio.read()
+
+# ---------- Routes ----------
+@app.get("/health")
+def health():
+    return {"ok": True}
+
+@app.get("/", response_class=HTMLResponse)
+def root(req: Request):
+    u = get_user(req)
+    if not u:
+        return RedirectResponse("/login", status_code=HTTP_303_SEE_OTHER)
     return RedirectResponse("/plan", status_code=HTTP_303_SEE_OTHER)
 
+@app.get("/login", response_class=HTMLResponse)
+def login_page(req: Request):
+    return templates.TemplateResponse("login.html", {"request": req})
 
-@app.post("/logout")
-def logout(request: Request, csrf_token: str = Form(...)):
-    verify_csrf(request, csrf_token)
-    request.session.clear()
+@app.post("/login")
+def do_login(
+    req: Request,
+    username: str = Form(...),
+    password: str = Form(...),
+):
+    with db() as conn:
+        cur = conn.execute("SELECT id, username, password, role FROM users WHERE username=?", (username,))
+        row = cur.fetchone()
+    if row and password == row[2]:
+        req.session["user"] = {"id": row[0], "username": row[1], "role": row[3]}
+        return RedirectResponse("/plan", status_code=HTTP_303_SEE_OTHER)
+    return templates.TemplateResponse("login.html", {"request": req, "error": "Kullanıcı adı veya şifre hatalı."})
+
+@app.get("/logout")
+def logout(req: Request):
+    req.session.clear()
     return RedirectResponse("/login", status_code=HTTP_303_SEE_OTHER)
 
-
-@app.get("/plan", response_class=HTMLResponse)
-def plan_page(request: Request):
-    try:
-        require_login(request)
-    except HTTPException:
-        return RedirectResponse("/login", status_code=HTTP_303_SEE_OTHER)
-    ctx = {
-        "request": request,
-        "csrf_token": ensure_csrf(request),
-        "session_user": session_user(request),
-    }
-    return templates.TemplateResponse("plan.html", ctx)
-
-
 @app.get("/admin", response_class=HTMLResponse)
-def admin_page(request: Request):
-    try:
-        require_admin(request)
-    except HTTPException as ex:
-        if ex.status_code == 307:
-            return RedirectResponse("/login", status_code=HTTP_303_SEE_OTHER)
-        raise
+def admin_page(req: Request):
+    guard = require_admin(req)
+    if guard:
+        return guard
+    with db() as conn:
+        users = [
+            {"id": r[0], "username": r[1], "role": r[3], "created_at": r[4]}
+            for r in conn.execute("SELECT id,username,password,role,created_at FROM users ORDER BY id DESC")
+        ]
+    return templates.TemplateResponse("admin.html", {"request": req, "users": users})
 
-    with db_conn() as con:
-        cur = con.cursor()
-        cur.execute("SELECT id, username, role, created_at FROM users ORDER BY id ASC")
-        users = [{"id": r[0], "username": r[1], "role": r[2], "created_at": r[3]} for r in cur.fetchall()]
-
-    ctx = {"request": request, "csrf_token": ensure_csrf(request), "users": users}
-    return templates.TemplateResponse("admin.html", ctx)
-
-
-@app.post("/admin/users/create")
-def admin_user_create(
-    request: Request,
+@app.post("/admin/create-user")
+def admin_create_user(
+    req: Request,
     username: str = Form(...),
     password: str = Form(...),
     role: str = Form("user"),
-    csrf_token: str = Form(...)
 ):
-    require_admin(request)
-    verify_csrf(request, csrf_token)
-    if role not in ("user", "admin"):
-        role = "user"
-    try:
-        with db_conn() as con:
-            cur = con.cursor()
-            cur.execute(
-                "INSERT INTO users(username, password, role, created_at) VALUES(?,?,?,?)",
-                (username, password, role, datetime.utcnow().isoformat(timespec="seconds")),
-            )
-            con.commit()
-    except sqlite3.IntegrityError:
-        return JSONResponse({"detail": "Bu kullanıcı adı zaten var."}, status_code=400)
-
-    return RedirectResponse("/admin", status_code=HTTP_303_SEE_OTHER)
-
-
-@app.post("/admin/users/{uid}/delete")
-def admin_user_delete(request: Request, uid: int, csrf_token: str = Form(...)):
-    require_admin(request)
-    verify_csrf(request, csrf_token)
-    with db_conn() as con:
-        cur = con.cursor()
-        cur.execute("SELECT username FROM users WHERE id=?", (uid,))
-        r = cur.fetchone()
-        if not r:
-            return RedirectResponse("/admin", status_code=HTTP_303_SEE_OTHER)
-        if r["username"] == "admin":
-            return RedirectResponse("/admin", status_code=HTTP_303_SEE_OTHER)
-        cur.execute("DELETE FROM users WHERE id=?", (uid,))
-        con.commit()
-    return RedirectResponse("/admin", status_code=HTTP_303_SEE_OTHER)
-
-
-# =========================
-# Sağlık
-# =========================
-@app.get("/health")
-def health():
-    return {"ok": True, "app": APP_NAME}
-
-
-# =========================
-# Gemini yardımcıları
-# =========================
-def _strip_json(text: str) -> str:
-    t = text.strip()
-    if "```" in t:
-        s = t.find("```")
-        e = t.rfind("```")
-        if s != -1 and e != -1 and e > s:
-            inner = t[s + 3 : e]
-            if "\n" in inner:
-                inner = inner.split("\n", 1)[1]
-            t = inner.strip()
-    first = t.find("{")
-    last = t.rfind("}")
-    if first != -1 and last != -1 and last > first:
-        t = t[first : last + 1]
-    return t
-
-
-def gemini_generate_for_image(image_bytes: bytes, mime_type: str, hotel_name: str) -> dict:
-    if not (GEMINI_AVAILABLE and GEMINI_API_KEY):
-        return {
-            "caption": f"{hotel_name} ile keyifli anlar! Tatil ruhu bu karede.",
-            "hashtags": ["#otel", "#tatil", "#keşfet", "#konaklama", "#seyahat", "#hotellife"],
-        }
-
-    model = genai.GenerativeModel(GEMINI_MODEL)
-    prompt = (
-        "Rolün: Otel için Instagram içerik yazarı.\n"
-        "Verilecek fotoğrafa uygun **Türkçe** 1-2 cümlelik sıcak bir açıklama yaz.\n"
-        "Ardından 8-12 adet yine görsele uygun **Türkçe** hashtag üret.\n"
-        f"Otel adı: {hotel_name}\n"
-        "Sadece şu JSON çıktıyı ver:\n"
-        "{\n  \"caption\": \"...\",\n  \"hashtags\": [\"#...\"]\n}\n"
-        "Başka metin ekleme."
-    )
-    img_part = {"mime_type": mime_type or "image/jpeg", "data": image_bytes}
-
-    try:
-        resp = model.generate_content([prompt, img_part])
-        text = resp.text or ""
-        cleaned = _strip_json(text)
-        data = json.loads(cleaned)
-        cap = str(data.get("caption", "")).strip() or f"{hotel_name} ile unutulmaz anlar!"
-        hashtags = data.get("hashtags", [])
-        if isinstance(hashtags, str):
-            hashtags = [h.strip() for h in hashtags.split() if h.strip()]
-        hashtags = [h if h.startswith("#") else f"#{h}" for h in hashtags][:12]
-        if not hashtags:
-            hashtags = ["#otel", "#tatil", "#keşfet", "#seyahat"]
-        return {"caption": cap, "hashtags": hashtags}
-    except Exception:
-        return {
-            "caption": f"{hotel_name} için özel bir kare! Sizi bekliyoruz.",
-            "hashtags": ["#otel", "#tatil", "#keşfet", "#holiday"],
-        }
-
-
-# =========================
-# DOCX oluşturucu
-# =========================
-def build_plan_docx(
-    hotel_name: str,
-    contact_info: str,
-    start_date: datetime,
-    interval_days: int,
-    images: List[UploadFile],
-) -> bytes:
-    doc = Document()
-    for idx, uf in enumerate(images):
-        # Tarih başlığı
-        date_str = (start_date + timedelta(days=idx * interval_days)).strftime("%d.%m.%Y")
-        h = doc.add_heading(date_str, level=1)
-        h.alignment = 1
-
-        # Görsel
-        data = uf.file.read()
-        uf.file.seek(0)
+    guard = require_admin(req)
+    if guard:
+        return guard
+    with db() as conn:
         try:
-            img = io.BytesIO(data)
-            Image.open(img).close()
-            img.seek(0)
-            doc.add_picture(img, width=Inches(6.0))
-        except Exception:
-            doc.add_paragraph("[Görsel eklenemedi]")
+            conn.execute(
+                "INSERT INTO users(username,password,role,created_at) VALUES(?,?,?,?)",
+                (username, password, role, datetime.utcnow().isoformat()),
+            )
+            conn.commit()
+        except sqlite3.IntegrityError:
+            return templates.TemplateResponse("admin.html", {"request": req, "error": "Bu kullanıcı zaten var."})
+    return RedirectResponse("/admin", status_code=HTTP_303_SEE_OTHER)
 
-        # Açıklama / İletişim / Hashtag
-        gen = gemini_generate_for_image(data, uf.content_type, hotel_name)
-        caption = gen.get("caption", "").strip()
-        hashtags = gen.get("hashtags", [])
+@app.get("/plan", response_class=HTMLResponse)
+def plan_page(req: Request):
+    guard = require_login(req)
+    if guard:
+        return guard
+    return templates.TemplateResponse("plan.html", {"request": req})
 
-        doc.add_paragraph(f"Açıklama: {caption}")
-        if contact_info.strip():
-            doc.add_paragraph(f"Otel iletişim bilgisi: {contact_info.strip()}")
-        if hashtags:
-            doc.add_paragraph("Hashtagler: " + " ".join(hashtags))
-
-        if idx < len(images) - 1:
-            doc.add_page_break()
-
-    out = io.BytesIO()
-    doc.save(out)
-    return out.getvalue()
-
-
-# =========================
-# API
-# =========================
-@app.post("/api/plan/create")
-async def api_plan_create(
-    request: Request,
-    hotel_name: str = Form(...),
-    contact_info: str = Form(""),
-    interval_days: int = Form(1),
-    docx_filename: str = Form("Instagram_Plani.docx"),
-    start_date: str = Form(...),
-    csrf_token: str = Form(...),
-    images: List[UploadFile] = File(...),
+@app.post("/api/plan")
+async def api_plan(
+    req: Request,
+    doc_title: str = Form("Instagram_Plani"),
+    start_date: str = Form(...),          # YYYY-MM-DD
+    every_n_days: int = Form(1),
+    hotel_contact: str = Form(""),
+    files: List[UploadFile] = File(...),
 ):
-    require_login(request)
-    verify_csrf(request, csrf_token)
+    guard = require_login(req)
+    if guard:
+        return guard
 
-    if not images:
-        return JSONResponse({"detail": "En az bir görsel seçin."}, status_code=400)
+    # Görselleri oku (orijinal sırayı koru)
+    images_bytes: List[bytes] = []
+    for f in files:
+        data = await f.read()
+        # HEIC/HEIF -> Pillow zaten açacak, docx için JPEG’e dönüştürme add_image_to_doc içinde
+        images_bytes.append(data)
 
+    if not images_bytes:
+        raise HTTPException(400, "Görsel yüklenmedi.")
+
+    # Tarih
     try:
-        sd = datetime.strptime(start_date, "%Y-%m-%d")
+        start_dt = datetime.strptime(start_date, "%Y-%m-%d")
     except ValueError:
-        return JSONResponse({"detail": "Başlangıç tarihi geçersiz."}, status_code=400)
+        raise HTTPException(400, "Geçersiz başlangıç tarihi.")
 
-    try:
-        blob = build_plan_docx(
-            hotel_name=hotel_name.strip(),
-            contact_info=contact_info.strip(),
-            start_date=sd,
-            interval_days=max(1, int(interval_days)),
-            images=images,
-        )
-    except Exception as e:
-        print("[ERROR] plan create failed:", repr(e))
-        return JSONResponse({"detail": "Plan oluşturulamadı."}, status_code=500)
+    # Başlık/isim
+    safe_title = "".join(ch for ch in doc_title if ch.isalnum() or ch in ("_", "-", " ")).strip() or "Instagram_Plani"
+    filename = f"{safe_title}.docx"
 
-    fn = (docx_filename or "Instagram_Plani.docx").strip()
-    if not fn.lower().endswith(".docx"):
-        fn += ".docx"
+    # Açıklama + hashtag üretimi (emojili) her görsel için
+    captions: List[str] = []
+    tags_list: List[str] = []
+    for idx, img in enumerate(images_bytes):
+        # Gemini varsa multimodal
+        if GEMINI_OK:
+            cap, tags = await gemini_caption_and_tags(img, hotel_contact)
+        else:
+            cap, tags = fallback_caption_and_tags(idx, hotel_contact)
+        # Başlık YOK: direkt metin
+        # Emojisiz kalırsa garanti et:
+        if not any(e in cap for e in EMOJIS):
+            cap += " " + EMOJIS[idx % len(EMOJIS)]
+        captions.append(cap)
+        tags_list.append(tags)
 
-    headers = {"Content-Disposition": f'attachment; filename="{fn}"'}
-    return StreamingResponse(io.BytesIO(blob),
-                             media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-                             headers=headers)
+    # DOCX oluştur
+    doc_bytes = write_plan_docx(
+        images=images_bytes,
+        start_date=start_dt,
+        every_n_days=every_n_days,
+        hotel_info=hotel_contact.strip(),
+        title=safe_title,
+        captions=captions,
+        tags_list=tags_list,
+    )
+
+    return StreamingResponse(
+        io.BytesIO(doc_bytes),
+        media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        headers={
+            "Content-Disposition": f'attachment; filename="{filename}"'
+        },
+    )
