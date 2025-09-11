@@ -1,17 +1,24 @@
-{% extends "base.html" %}
-{% block content %}
-<div class="card">
-  <h1 class="title">Giriş Yap</h1>
-  {% if error %}<div class="alert">{{ error }}</div>{% endif %}
-  <form method="post" action="/login" class="grid">
-    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-    <label>Kullanıcı adı
-      <input name="username" placeholder="admin" required>
-    </label>
-    <label>Şifre
-      <input name="password" type="password" placeholder="••••••••" required>
-    </label>
-    <button class="btn-primary" type="submit">Giriş</button>
-  </form>
-</div>
-{% endblock %}
+<!doctype html>
+<html lang="tr">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Giriş • {{ app_name }}</title>
+  <link rel="stylesheet" href="/static/css/app.css" />
+</head>
+<body class="login-body">
+  <div class="login-card">
+    <div class="brand">{{ app_name }}</div>
+    {% if error %}
+      <div class="alert">{{ error }}</div>
+    {% endif %}
+    <form method="post" action="/login" class="form">
+      <label>Kullanıcı Adı</label>
+      <input type="text" name="username" required />
+      <label>Şifre</label>
+      <input type="password" name="password" required />
+      <button class="btn" type="submit">Giriş yap</button>
+    </form>
+  </div>
+</body>
+</html>
