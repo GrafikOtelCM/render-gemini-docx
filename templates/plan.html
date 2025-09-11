@@ -1,49 +1,45 @@
 {% extends "base.html" %}
 {% block content %}
-<div class="card">
-  <h1 class="title">Instagram Planı Oluştur</h1>
+<h1>Instagram Planı Oluştur</h1>
 
-  <form id="planForm" class="grid" onsubmit="return false;">
-    <input type="hidden" name="csrf_token" id="csrf_token" value="{{ csrf_token }}">
-
-    <label>Otel adı
-      <input name="hotel_name" id="hotel_name" placeholder="Örn: Blue Coast Hotel" required>
-    </label>
-
-    <label>Otel iletişim bilgisi
-      <input name="contact_info" id="contact_info" placeholder="Telefon, e-posta, adres…">
-    </label>
-
-    <label>Başlangıç tarihi
-      <input name="start_date" id="start_date" type="date" required>
-    </label>
-
-    <label>Kaç günde bir paylaşılsın?
-      <input name="interval_days" id="interval_days" type="number" min="1" value="1" required>
-    </label>
-
-    <label>Çıkacak Word dosya adı
-      <input name="docx_filename" id="docx_filename" value="Instagram_Plani.docx">
-    </label>
-
-    <label>Hızlı ay seçimi (opsiyonel)
-      <select id="quick_month">
-        <option value="">— Seçiniz —</option>
-      </select>
-    </label>
-
-    <div class="full">
-      <label>Görseller
-        <input id="images" type="file" accept="image/*" multiple>
-      </label>
-      <div id="dropzone" class="drop">Görselleri buraya sürükleyip bırakın</div>
-      <div id="preview" class="preview">Seçili görsel yok.</div>
+<section class="card">
+  <form id="planForm" class="grid" enctype="multipart/form-data">
+    <div>
+      <label>Dosya Adı</label>
+      <input name="doc_title" placeholder="Instagram_Plani" />
+    </div>
+    <div>
+      <label>Başlangıç Tarihi</label>
+      <input type="date" name="start_date" required />
+    </div>
+    <div>
+      <label>Kaç günde 1?</label>
+      <input type="number" name="every_n_days" min="1" value="1" required />
+    </div>
+    <div class="col-span-2">
+      <label>Otel İletişim Bilgisi (etiketsiz eklenecek)</label>
+      <textarea name="hotel_contact" rows="3" placeholder="☎️ 0xxx... • 📍 Adres • www..."></textarea>
     </div>
 
-    <div class="full">
-      <button id="createBtn" class="btn-primary">Planı Oluştur</button>
-      <span id="status" class="muted"></span>
+    <div class="col-span-2">
+      <label>Görseller (sürükle-bırak)</label>
+      <div id="dropzone" class="dropzone">
+        <input id="fileInput" type="file" name="files" accept="image/*" multiple />
+        <p>Görselleri buraya bırak veya tıkla</p>
+      </div>
+      <div id="thumbs" class="thumbs"></div>
+    </div>
+
+    <div class="row-end">
+      <button class="btn" type="submit">Planı Oluştur</button>
     </div>
   </form>
-</div>
+</section>
+
+<section class="muted">
+  <ul>
+    <li>Her sayfa: <strong>Tarih</strong> → <strong>Görsel</strong> → <strong>Emojili Açıklama</strong> → <strong>Otel info</strong> → <strong>Hashtag</strong></li>
+    <li>Başlıklar (Açıklama/Hashtag) eklenmez — metinler direkt kopyalanabilir.</li>
+  </ul>
+</section>
 {% endblock %}
