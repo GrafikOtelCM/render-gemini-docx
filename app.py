@@ -149,12 +149,14 @@ def gemini_json(image_bytes: bytes, hotel_info: str) -> Tuple[str, List[str]]:
     """
     # İstek metni: sadece JSON döndürmesi için net talimat
     sys_prompt = (
-        "Aşağıdaki görüntüye uygun, Instagram gönderisi için TÜRKÇE tek paragraf "
+        "Aşağıdaki görüntüye uygun, Instagram gönderisi için TÜRKÇE tek cümle "
         "bir açıklama üret. Emoji kullan (en az 2-3 emoji, ama abartma). "
+        "Kaçamak, gibi kelimeler kullanma. "
+        "Otelin ismini açıklamaya ekleme. "
         "Ayrıca görüntüye uygun tam 4 hashtag üret ve hepsi # ile başlasın. "
         "Cevabı JSON ver:\n"
         "{\n"
-        '  "caption": "<emoji içeren tek paragraf>",\n'
+        '  "caption": "<emoji içeren tek cümle>",\n'
         '  "hashtags": ["#...", "#...", "#...", "#..."]\n'
         "}"
         "\nBaşlık etiketi, açıklama etiketi, iletişim vb. ekleme. Sadece JSON."
@@ -169,7 +171,7 @@ def gemini_json(image_bytes: bytes, hotel_info: str) -> Tuple[str, List[str]]:
         small = img.resize((64, 64))
         avg = tuple(sum(p[i] for p in small.getdata()) // (64 * 64) for i in range(3))
         mood = "sıcak" if avg[0] > avg[2] else "serin"
-        caption = f"Yeni bir paylaşımla karşınızdayız! {mood} tonların öne çıktığı bu karede keyif ve konfor bir arada 🌿✨"
+        caption = {mood} tonların öne çıktığı bu karede keyif ve konfor bir arada 🌿✨"
         hashtags = ["#tatil", "#otelseyahat", "#keyif", "#instahotel"]
         return caption, hashtags
 
@@ -214,11 +216,11 @@ def gemini_json(image_bytes: bytes, hotel_info: str) -> Tuple[str, List[str]]:
             tags.append("#tatil")
         # caption boşsa fallback
         if not caption:
-            caption = "Tatil ruhu burada! Konfor, lezzet ve keyif dolu anlar sizi bekliyor ✨🌊"
+            caption = "Lezzet ve keyif dolu anlar sizi bekliyor ✨🌊"
         return caption, tags
     except Exception:
         # fallback
-        caption = "Keyifli anlara hazır mısınız? Doğa ve huzurun buluştuğu bu karede güzel bir gün dileriz 🌿😊"
+        caption = "Doğa ve huzurun buluştuğu bu karede güzel bir gün dileriz 🌿😊"
         tags = ["#otel", "#keşfet", "#tatil", "#instatravel"]
         return caption, tags
 
