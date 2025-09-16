@@ -171,7 +171,7 @@ def gemini_json(image_bytes: bytes, hotel_info: str) -> Tuple[str, List[str]]:
         small = img.resize((64, 64))
         avg = tuple(sum(p[i] for p in small.getdata()) // (64 * 64) for i in range(3))
         mood = "sıcak" if avg[0] > avg[2] else "serin"
-        caption = {mood} tonların öne çıktığı bu karede keyif ve konfor bir arada 🌿✨"
+        caption = f"{mood} tonların öne çıktığı bu karede keyif ve konfor bir arada 🌿✨"
         hashtags = ["#tatil", "#otelseyahat", "#keyif", "#instahotel"]
         return caption, hashtags
 
