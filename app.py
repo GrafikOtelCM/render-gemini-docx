@@ -153,6 +153,8 @@ def gemini_json(image_bytes: bytes, hotel_info: str) -> Tuple[str, List[str]]:
         "bir açıklama üret. Emoji kullan (en az 2-3 emoji, ama abartma). "
         "Kaçamak, gibi kelimeler kullanma. "
         "Otelin ismini açıklamaya ekleme. "
+        "3. çoğul şahıs ile yaz. "
+        "Siz, biz gibi kurumsal dili koru "
         "Ayrıca görüntüye uygun tam 4 hashtag üret ve hepsi # ile başlasın. "
         "Cevabı JSON ver:\n"
         "{\n"
